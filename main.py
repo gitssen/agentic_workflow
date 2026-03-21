@@ -3,7 +3,7 @@ import json
 import re
 import inspect
 import importlib.util
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import firestore
@@ -72,7 +72,7 @@ class ToolRegistry:
         
         return relevant_tools
 
-# --- 3. The Brain (Generic ReAct Agent) ---
+# --- 3. The Brain (Recursive ReAct Agent) ---
 
 SYSTEM_PROMPT_TEMPLATE = """
 You are a helpful AI assistant. You solve problems by following a structured ReAct (Reasoning and Acting) loop.
@@ -95,47 +95,63 @@ Important:
 1. Only provide ONE Thought/Action/Action Input per turn. 
 2. Wait for the Observation before continuing.
 3. If you have enough information, provide the Final Answer immediately.
-4. Always check if you have actually answered the User's specific question before giving the Final Answer.
+4. Efficiency Rule: Prioritize '[Self-Resolving]' tools. If a tool can find its own missing data (check its Capability tag), call it directly. Only perform manual 'stitching' if a tool explicitly requires an argument that it cannot find itself.
 """
 
+class SubAgent:
+    """A lightweight agent that can be passed into tools to solve sub-tasks."""
+    def __init__(self, registry: ToolRegistry, model_id: str, depth: int):
+        self.registry = registry
+        self.model_id = model_id
+        self.depth = depth
+
+    def solve(self, goal: str) -> str:
+        """Runs a nested ReAct loop to solve a specific sub-goal."""
+        print(f"    [Sub-Agent (Depth {self.depth})] Goal: {goal}")
+        agent = GenericReActAgent(self.registry, self.model_id, depth=self.depth)
+        return agent.run(goal)
+
 class GenericReActAgent:
-    def __init__(self, registry: ToolRegistry, model_id: str = MODEL_ID):
+    def __init__(self, registry: ToolRegistry, model_id: str = MODEL_ID, depth: int = 0):
         self.client = get_genai_client()
         self.model_id = model_id
         self.registry = registry
+        self.depth = depth
         self.chat_history = [] # Long-term User/Assistant exchanges
         
     def _format_docs(self, tools: List[Dict[str, Any]]) -> str:
         docs = []
         for t in tools:
-            docs.append(f"- {t['full_doc']}")
+            # Check if tool is 'Smart' by looking for sub_agent in signature
+            sig = t.get("signature", "")
+            capability = " [Self-Resolving]" if "sub_agent" in sig else ""
+            docs.append(f"- {t['full_doc']}{capability}")
         return "\n".join(docs)
 
     def run(self, user_input: str):
         # Step 1: Semantic Search for relevant tools
         relevant_tools = self.registry.get_relevant_tools(user_input)
         tool_docs = self._format_docs(relevant_tools)
-        print(f"tools found: {[t['name'] for t in relevant_tools]}")
         available_tool_funcs = {t['name']: t['func'] for t in relevant_tools}
 
-        # Step 2: Initialize local task history for this specific ReAct loop
+        # Step 2: Initialize local task history
         task_history = [f"User: {user_input}"]
+        indent = "  " * self.depth
 
         for i in range(8):
-            # Combine long-term chat history with current task's intermediate steps
             full_context = self.chat_history + task_history
             prompt = (SYSTEM_PROMPT_TEMPLATE.format(tool_definitions=tool_docs) + 
                       "\n\n" + "\n".join(full_context) + "\nThought:")
             
             response = self.client.models.generate_content(model=self.model_id, contents=prompt)
             raw_output = "Thought: " + response.text.strip()
-            print(f"\n--- Step {i+1} ---\n{raw_output}")
+            print(f"\n{indent}--- Step {i+1} (Depth {self.depth}) ---\n{indent}{raw_output}")
             
             if "Final Answer:" in raw_output:
                 final_answer = raw_output.split("Final Answer:")[-1].strip()
-                # Update long-term history with just the clean exchange
-                self.chat_history.append(f"User: {user_input}")
-                self.chat_history.append(f"Assistant: {final_answer}")
+                if self.depth == 0:
+                    self.chat_history.append(f"User: {user_input}")
+                    self.chat_history.append(f"Assistant: {final_answer}")
                 return final_answer
             
             try:
@@ -149,19 +165,30 @@ class GenericReActAgent:
                 action_args = json.loads(input_match.group(1).strip())
                 
                 if action_name in available_tool_funcs:
-                    observation = str(available_tool_funcs[action_name](**action_args))
+                    func = available_tool_funcs[action_name]
+                    sig = inspect.signature(func)
+                    
+                    # Inject SubAgent if requested, but cap depth
+                    if "sub_agent" in sig.parameters:
+                        if self.depth < 2:
+                            sub_agent = SubAgent(self.registry, self.model_id, self.depth + 1)
+                            observation = str(func(**action_args, sub_agent=sub_agent))
+                        else:
+                            observation = "Error: Max recursion depth reached. Please provide all arguments manually."
+                    else:
+                        observation = str(func(**action_args))
                 else:
                     observation = f"Error: Tool '{action_name}' not available for this task."
                 
                 task_history.append(raw_output)
                 task_history.append(f"Observation: {observation}")
-                print(f"Observation: {observation}")
+                print(f"{indent}Observation: {observation}")
                 
             except Exception as e:
                 obs = f"Error parsing/executing tool: {str(e)}. Check your format."
                 task_history.append(raw_output)
                 task_history.append(f"Observation: {obs}")
-                print(f"Observation: {obs}")
+                print(f"{indent}Observation: {obs}")
 
         return "Max reasoning steps reached."
 
@@ -171,7 +198,7 @@ def main():
     try:
         registry = ToolRegistry()
         agent = GenericReActAgent(registry=registry)
-        print("--- Generic ReAct Agent (with Firebase Tool-RAG) Ready ---")
+        print("--- Recursive ReAct Agent Ready ---")
     except ValueError as e:
         print(f"Error: {e}")
         return
