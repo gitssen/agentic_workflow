@@ -6,8 +6,31 @@ the high-level conversation using a ReAct reasoning loop.
 
 import os
 import asyncio
+import readline
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
+
+# History file configuration
+HISTORY_FILE = ".agent_history"
+
+def setup_history():
+    """Loads command history from the history file."""
+    if os.path.exists(HISTORY_FILE):
+        try:
+            readline.read_history_file(HISTORY_FILE)
+        except Exception:
+            pass
+    readline.set_history_length(1000)
+
+def save_history():
+    """Saves command history to the history file."""
+    try:
+        readline.write_history_file(HISTORY_FILE)
+    except Exception:
+        pass
+
+# Load history at startup
+setup_history()
 import firebase_admin
 from firebase_admin import firestore
 from mcp import ClientSession, StdioServerParameters
@@ -90,7 +113,7 @@ async def main():
                     query = input("\nUser > ").strip()
                     if query.lower() in ["exit", "quit"]: break
                     if query: 
-                        # Run the ReAct loop for the current question
+                        save_history() # Save history before processing
                         result = await agent.run(query)
                         logger.info(f"Result > {result}")
                 except KeyboardInterrupt: break

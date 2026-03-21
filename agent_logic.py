@@ -34,7 +34,8 @@ Important:
 1. Only provide ONE Thought/Action/Action Input per turn. 
 2. Wait for the Observation before continuing.
 3. If you have enough information, provide the Final Answer immediately.
-4. Efficiency Rule: Prioritize '[Self-Resolving]' tools. If a tool can find its own missing data, call it directly.
+4. If you are missing information that cannot be resolved via tools (e.g. you need the user to provide a specific parameter), use 'Final Answer' to ask the user for that information.
+5. Efficiency Rule: Prioritize '[Self-Resolving]' tools. If a tool can find its own missing data, call it directly.
 """
 
 class SubAgent:

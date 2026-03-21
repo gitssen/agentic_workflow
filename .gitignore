@@ -3,3 +3,4 @@ venv/*
 __pycache__/*
 tools/__pycache__/*
 logs/
+.agent_history

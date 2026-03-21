@@ -39,7 +39,8 @@ class AppReloader(FileSystemEventHandler):
     def on_modified(self, event):
         if event.is_directory:
             return
-        if event.src_path.endswith(".py") and not "/__pycache__/" in event.src_path:
+        # Ignore history file and pycache
+        if event.src_path.endswith(".py") and not any(x in event.src_path for x in ["/__pycache__/", ".agent_history"]):
             self.restart()
 
 def main():
