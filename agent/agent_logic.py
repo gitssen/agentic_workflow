@@ -43,10 +43,12 @@ Important:
 def load_persona(name: str = "general") -> str:
     """Loads a persona description from the prompts directory."""
     try:
-        path = os.path.join("prompts", f"{name}.md")
+        # Get the directory where this file resides
+        base_dir = os.path.dirname(__file__)
+        path = os.path.join(base_dir, "prompts", f"{name}.md")
         if not os.path.exists(path):
             logger.warning(f"Persona '{name}' not found. Falling back to 'general'.")
-            path = os.path.join("prompts", "general.md")
+            path = os.path.join(base_dir, "prompts", "general.md")
             
         with open(path, "r") as f:
             return f.read().strip()

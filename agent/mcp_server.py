@@ -32,7 +32,10 @@ class ToolManager:
     Manages the lifecycle, discovery, and execution of local tools.
     Provides Tool-RAG capabilities for internal SubAgents.
     """
-    def __init__(self, tools_dir: str = "tools"):
+    def __init__(self, tools_dir: str = None):
+        if tools_dir is None:
+            # Use the 'tools' directory within the same folder as this file
+            tools_dir = os.path.join(os.path.dirname(__file__), "tools")
         self.tools_dir = tools_dir
         self.tools = {}
         self.collection = db.collection("tools")

@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Logging Configuration ---
-LOG_DIR = "logs"
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
 LOG_FILE = os.path.join(LOG_DIR, "agent.log")
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 

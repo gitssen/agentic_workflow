@@ -8,9 +8,9 @@ from watchdog.events import FileSystemEventHandler
 
 # The paths to watch
 WATCH_DIR = "."
-MAIN_SCRIPT = "main.py"
+MAIN_SCRIPT = "cli_host.py"
 REGISTER_SCRIPT = "register_tools.py"
-PYTHON_BIN = os.path.join("venv", "bin", "python3")
+PYTHON_BIN = os.path.join("..", "venv", "bin", "python3")
 
 class AppReloader(FileSystemEventHandler):
     def __init__(self):
