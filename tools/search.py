@@ -1,4 +1,6 @@
-from config import get_genai_client, MODEL_ID
+from config import get_genai_client, MODEL_ID, setup_logger
+
+logger = setup_logger("Tool:Search")
 
 def search_knowledge_base(query: str) -> str:
     """
@@ -6,7 +8,7 @@ def search_knowledge_base(query: str) -> str:
     Args:
         query: The search term or question to look up.
     """
-    print(f"  [Tool] Searching Google (via Gemini) for: {query}...")
+    logger.info(f"  [Tool] Searching Google (via Gemini) for: {query}...")
 
     try:
         client = get_genai_client()
@@ -24,4 +26,5 @@ def search_knowledge_base(query: str) -> str:
         return f"Gemini Search Result: {answer}"
 
     except Exception as e:
+        logger.error(f"Search Error: {e}")
         return f"Gemini Search Error: {str(e)}"

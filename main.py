@@ -13,7 +13,10 @@ load_dotenv()
 
 from google.cloud.firestore_v1.vector import Vector
 from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
-from config import get_genai_client, MODEL_ID, EMBEDDING_MODEL_ID, FIRESTORE_DATABASE_ID
+from config import get_genai_client, MODEL_ID, EMBEDDING_MODEL_ID, FIRESTORE_DATABASE_ID, setup_logger
+
+# Initialize logger for main script
+logger = setup_logger("Agent")
 
 # --- 1. Firebase Initialization ---
 if not firebase_admin._apps:
@@ -107,7 +110,7 @@ class SubAgent:
 
     def solve(self, goal: str) -> str:
         """Runs a nested ReAct loop to solve a specific sub-goal."""
-        print(f"    [Sub-Agent (Depth {self.depth})] Goal: {goal}")
+        logger.info(f"    [Sub-Agent (Depth {self.depth})] Goal: {goal}")
         agent = GenericReActAgent(self.registry, self.model_id, depth=self.depth)
         return agent.run(goal)
 
@@ -122,19 +125,16 @@ class GenericReActAgent:
     def _format_docs(self, tools: List[Dict[str, Any]]) -> str:
         docs = []
         for t in tools:
-            # Check if tool is 'Smart' by looking for sub_agent in signature
             sig = t.get("signature", "")
             capability = " [Self-Resolving]" if "sub_agent" in sig else ""
             docs.append(f"- {t['full_doc']}{capability}")
         return "\n".join(docs)
 
     def run(self, user_input: str):
-        # Step 1: Semantic Search for relevant tools
         relevant_tools = self.registry.get_relevant_tools(user_input)
         tool_docs = self._format_docs(relevant_tools)
         available_tool_funcs = {t['name']: t['func'] for t in relevant_tools}
 
-        # Step 2: Initialize local task history
         task_history = [f"User: {user_input}"]
         indent = "  " * self.depth
 
@@ -145,7 +145,7 @@ class GenericReActAgent:
             
             response = self.client.models.generate_content(model=self.model_id, contents=prompt)
             raw_output = "Thought: " + response.text.strip()
-            print(f"\n{indent}--- Step {i+1} (Depth {self.depth}) ---\n{indent}{raw_output}")
+            logger.info(f"\n{indent}--- Step {i+1} (Depth {self.depth}) ---\n{indent}{raw_output}")
             
             if "Final Answer:" in raw_output:
                 final_answer = raw_output.split("Final Answer:")[-1].strip()
@@ -168,7 +168,6 @@ class GenericReActAgent:
                     func = available_tool_funcs[action_name]
                     sig = inspect.signature(func)
                     
-                    # Inject SubAgent if requested, but cap depth
                     if "sub_agent" in sig.parameters:
                         if self.depth < 2:
                             sub_agent = SubAgent(self.registry, self.model_id, self.depth + 1)
@@ -182,13 +181,13 @@ class GenericReActAgent:
                 
                 task_history.append(raw_output)
                 task_history.append(f"Observation: {observation}")
-                print(f"{indent}Observation: {observation}")
+                logger.info(f"{indent}Observation: {observation}")
                 
             except Exception as e:
                 obs = f"Error parsing/executing tool: {str(e)}. Check your format."
                 task_history.append(raw_output)
                 task_history.append(f"Observation: {obs}")
-                print(f"{indent}Observation: {obs}")
+                logger.error(f"{indent}Observation Error: {obs}")
 
         return "Max reasoning steps reached."
 
@@ -198,18 +197,21 @@ def main():
     try:
         registry = ToolRegistry()
         agent = GenericReActAgent(registry=registry)
-        print("--- Recursive ReAct Agent Ready ---")
+        logger.info("--- Recursive ReAct Agent Ready ---")
     except ValueError as e:
-        print(f"Error: {e}")
+        logger.error(f"Initialization Error: {e}")
         return
 
     while True:
         try:
             query = input("\nUser > ").strip()
             if query.lower() in ["exit", "quit"]: break
-            if query: print(f"\nResult > {agent.run(query)}")
+            if query: 
+                result = agent.run(query)
+                logger.info(f"Result > {result}")
         except KeyboardInterrupt: break
-        except Exception as e: print(f"Error: {e}")
+        except Exception as e: 
+            logger.error(f"Runtime Error: {e}")
 
 if __name__ == "__main__":
     main()

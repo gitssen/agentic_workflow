@@ -10,7 +10,10 @@ from firebase_admin import credentials, firestore
 load_dotenv()
 
 from google.cloud.firestore_v1.vector import Vector
-from config import get_genai_client, EMBEDDING_MODEL_ID, FIRESTORE_DATABASE_ID
+from config import get_genai_client, EMBEDDING_MODEL_ID, FIRESTORE_DATABASE_ID, setup_logger
+
+# Initialize logger for registry script
+logger = setup_logger("Registry")
 
 # Initialize Firebase
 if not firebase_admin._apps:
@@ -38,14 +41,14 @@ def register_tool(func, collection_name="tools"):
     if doc.exists:
         existing_data = doc.to_dict()
         if existing_data.get("hash") == current_hash:
-            print(f"  [Registry] Tool '{name}' is up to date. Skipping.")
+            logger.info(f"  [Registry] Tool '{name}' is up to date. Skipping.")
             return
 
     sig = str(inspect.signature(func))
     doc_str = func.__doc__.strip() if func.__doc__ else "No description available."
     full_description = f"{name}{sig}: {doc_str}"
     
-    print(f"  [Registry] Registering/Updating tool: {name} (New Hash: {current_hash[:8]}...)")
+    logger.info(f"  [Registry] Registering/Updating tool: {name} (New Hash: {current_hash[:8]}...)")
     
     # Generate embedding
     embedding_response = client.models.embed_content(
@@ -70,7 +73,7 @@ def register_tool(func, collection_name="tools"):
 def main():
     tools_dir = "tools"
     if not os.path.exists(tools_dir):
-        print(f"Error: {tools_dir} directory not found.")
+        logger.error(f"Error: {tools_dir} directory not found.")
         return
 
     for filename in os.listdir(tools_dir):

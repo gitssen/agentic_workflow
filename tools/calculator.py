@@ -1,4 +1,7 @@
 import sympy
+from config import setup_logger
+
+logger = setup_logger("Tool:Calc")
 
 def calculate(expression: str) -> str:
     """
@@ -8,7 +11,7 @@ def calculate(expression: str) -> str:
     Args:
         expression: A string to evaluate (e.g., 'diff(sin(x), x)', 'solve(x**2 - 4, x)', '2**100').
     """
-    print(f"  [Tool] Calculating with SymPy: {expression}...")
+    logger.info(f"  [Tool] Calculating with SymPy: {expression}...")
     try:
         # SymPy's sympify converts a string into a symbolic expression
         # and we use evalf() for numerical result if applicable, or just str() for symbolic result
@@ -20,4 +23,5 @@ def calculate(expression: str) -> str:
             
         return str(res)
     except Exception as e:
+        logger.error(f"Calc Error: {e}")
         return f"SymPy Error: {str(e)}"

@@ -1,5 +1,8 @@
 import json
 import requests
+from config import setup_logger
+
+logger = setup_logger("Tool:Weather")
 
 def get_weather(location: str = None, date: str = "now", sub_agent=None) -> str:
     """
@@ -11,17 +14,14 @@ def get_weather(location: str = None, date: str = "now", sub_agent=None) -> str:
     """
     if not location:
         if sub_agent:
-            print("  [Tool] Location missing. Asking sub-agent to find current location...")
-            # Natural language discovery - no hardcoded tool names!
+            logger.info("  [Tool] Location missing. Asking sub-agent to find current location...")
             res = sub_agent.solve("What is the user's current city and region?")
-            # We use a simple regex or split to get the location from the sub-agent's answer
-            # In a real system, we'd use the LLM to extract this reliably
             location = res.replace("Final Answer:", "").strip()
-            print(f"  [Tool] Sub-agent resolved location to: {location}")
+            logger.info(f"  [Tool] Sub-agent resolved location to: {location}")
         else:
             return "Error: Location is required but no sub-agent available."
 
-    print(f"  [Tool] Fetching weather for {location} (date: {date})...")
+    logger.info(f"  [Tool] Fetching weather for {location} (date: {date})...")
     try:
         response = requests.get(f"https://wttr.in/{location}?format=j1")
         response.raise_for_status()
@@ -42,4 +42,5 @@ def get_weather(location: str = None, date: str = "now", sub_agent=None) -> str:
             "condition": forecast['hourly'][4]['weatherDesc'][0]['value']
         })
     except Exception as e:
+        logger.error(f"Weather Error: {e}")
         return f"Error: {str(e)}"
