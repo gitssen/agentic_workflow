@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 from logging.handlers import RotatingFileHandler
 from google import genai
@@ -13,7 +14,7 @@ LOG_FILE = os.path.join(LOG_DIR, "agent.log")
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 def setup_logger(name: str):
-    """Sets up a logger with a RotatingFileHandler (DEBUG) and a StreamHandler (INFO)."""
+    """Sets up a logger with a RotatingFileHandler (DEBUG) and a StreamHandler (sys.stderr)."""
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG) # Catch everything at the logger level
     
@@ -28,7 +29,8 @@ def setup_logger(name: str):
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
         
         # Stream Handler (Captures only INFO and above for a clean CLI)
-        stream_handler = logging.StreamHandler()
+        # We explicitly use sys.stderr to avoid corrupting MCP Stdio (stdout)
+        stream_handler = logging.StreamHandler(sys.stderr)
         stream_handler.setLevel(logging.INFO)
         stream_handler.setFormatter(logging.Formatter("%(message)s"))
         

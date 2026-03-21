@@ -1,7 +1,7 @@
 """
 MCP Host: The primary entry point for the agentic workflow.
-Acts as an MCP Client that connects to the tool server and orchestrates
-the high-level conversation using a ReAct reasoning loop.
+Acts as an MCP Client that connects to the tool server.
+Now supports Persona Selection.
 """
 
 import os
@@ -9,28 +9,6 @@ import asyncio
 import readline
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
-
-# History file configuration
-HISTORY_FILE = ".agent_history"
-
-def setup_history():
-    """Loads command history from the history file."""
-    if os.path.exists(HISTORY_FILE):
-        try:
-            readline.read_history_file(HISTORY_FILE)
-        except Exception:
-            pass
-    readline.set_history_length(1000)
-
-def save_history():
-    """Saves command history to the history file."""
-    try:
-        readline.write_history_file(HISTORY_FILE)
-    except Exception:
-        pass
-
-# Load history at startup
-setup_history()
 import firebase_admin
 from firebase_admin import firestore
 from mcp import ClientSession, StdioServerParameters
@@ -44,82 +22,112 @@ from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
 load_dotenv()
 logger = setup_logger("MCPHost")
 
+# History file configuration
+HISTORY_FILE = ".agent_history"
+
+def setup_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            readline.read_history_file(HISTORY_FILE)
+        except Exception:
+            pass
+    readline.set_history_length(1000)
+
+def save_history():
+    try:
+        readline.write_history_file(HISTORY_FILE)
+    except Exception:
+        pass
+
+setup_history()
+
 # --- 1. Infrastructure Initialization ---
 if not firebase_admin._apps:
     firebase_admin.initialize_app()
 db = firestore.client(database_id=FIRESTORE_DATABASE_ID)
 
 class HostRegistry:
-    """
-    Registry used by the Host to perform Tool-RAG (Retrieval Augmented Generation).
-    Retrieves the most semantically relevant tools from Firestore to minimize 
-    context window usage and costs.
-    """
     def __init__(self, collection_name: str = "tools"):
         self.collection = db.collection(collection_name)
 
     async def get_relevant_tools(self, query: str, limit: int = 3) -> list[dict[str, Any]]:
-        """
-        Embeds the query and performs a vector search in Firestore.
-        Returns top-N relevant tool metadata documents.
-        """
         from config import get_genai_client
         client = get_genai_client()
         embedding_response = client.models.embed_content(
             model=EMBEDDING_MODEL_ID, contents=query, config={"output_dimensionality": 768}
         )
         query_vector = embedding_response.embeddings[0].values
-        
-        # Perform Vector Search (Requires Index on 'embedding' field)
         results = self.collection.find_nearest(
             vector_field="embedding", query_vector=Vector(query_vector),
             distance_measure=DistanceMeasure.COSINE, limit=limit
         ).get()
         return [doc.to_dict() for doc in results]
 
+def select_persona() -> str:
+    """Prompts the user to select a persona from the prompts/ directory."""
+    prompts_dir = "prompts"
+    if not os.path.exists(prompts_dir):
+        return "general"
+    
+    files = [f[:-3] for f in os.listdir(prompts_dir) if f.endswith(".md")]
+    if not files:
+        return "general"
+    
+    print("\n--- Available Personas ---")
+    for i, f in enumerate(files, 1):
+        print(f"{i}. {f}")
+    
+    try:
+        choice = input("\nSelect a persona (number) or press Enter for 'general' > ").strip()
+        if not choice:
+            return "general"
+        idx = int(choice) - 1
+        if 0 <= idx < len(files):
+            return files[idx]
+    except Exception:
+        pass
+    
+    return "general"
+
 async def main():
-    """
-    Main entry point: 
-    1. Connects to the MCP Server.
-    2. Initializes the ReAct Agent.
-    3. Starts the interactive CLI loop.
-    """
-    # Define connection parameters for the MCP Server
+    persona = select_persona()
+    logger.info(f"Active Persona: {persona}")
+
     server_params = StdioServerParameters(
         command="./venv/bin/python3",
         args=["mcp_server.py"],
-        env={**os.environ} # Pass environment variables to the server process
+        env={**os.environ}
     )
 
-    # Establish the MCP connection (Stdio)
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
-            # Initialize the MCP Session (Handshake)
             await session.initialize()
             
-            # Bridge function to execute tools via the MCP protocol
             async def execute_via_mcp(name, args):
                 res = await session.call_tool(name, args)
                 return res.content[0].text
 
-            # Instantiate the Reasoning Agent
             registry = HostRegistry()
-            agent = GenericReActAgent(registry, execute_via_mcp)
-            logger.info("--- MCP Agent (Recursive Tool-RAG) Ready ---")
+            # Pass the selected persona to the agent
+            agent = GenericReActAgent(registry, execute_via_mcp, persona=persona)
+            logger.info(f"--- MCP Host Ready ({persona}) ---")
 
-            # Interactive Chat Loop
             while True:
                 try:
-                    query = input("\nUser > ").strip()
+                    query = input(f"\n[{persona}] User > ").strip()
                     if query.lower() in ["exit", "quit"]: break
                     if query: 
-                        save_history() # Save history before processing
+                        save_history()
                         result = await agent.run(query)
                         logger.info(f"Result > {result}")
-                except KeyboardInterrupt: break
+                except (EOFError, KeyboardInterrupt):
+                    break
                 except Exception as e: 
                     logger.error(f"Runtime Error: {e}")
+                    # If we hit a persistent I/O error (like Errno 5), the terminal is likely gone.
+                    # Breaking here prevents a tight loop that would flood the logs.
+                    if "[Errno 5]" in str(e):
+                        break
 
 if __name__ == "__main__":
-    # Start the event loop
     asyncio.run(main())

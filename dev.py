@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import signal
 import subprocess
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -17,14 +18,18 @@ class AppReloader(FileSystemEventHandler):
         self.restart()
 
     def restart(self):
-        # Terminate existing process if any
+        # Terminate existing process group if any
         if self.process:
             print("\n  [Dev] Change detected. Restarting...")
-            self.process.terminate()
             try:
+                # Kill the entire process group (including any subprocesses like mcp_server.py)
+                os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
                 self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                try:
+                    os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
         # If tools changed, we should register them first
         # This is a bit simplistic; you could check which file changed.
@@ -32,9 +37,9 @@ class AppReloader(FileSystemEventHandler):
         print("  [Dev] Checking tool registry...")
         subprocess.run([PYTHON_BIN, REGISTER_SCRIPT])
 
-        # Start the main process
-        # We use a new session to ensure it gets stdin/stdout correctly
-        self.process = subprocess.Popen([PYTHON_BIN, MAIN_SCRIPT])
+        # Start the main process in a new session to create its own process group
+        # This allows us to kill the host and all its children together.
+        self.process = subprocess.Popen([PYTHON_BIN, MAIN_SCRIPT], preexec_fn=os.setsid)
 
     def on_modified(self, event):
         if event.is_directory:
@@ -63,7 +68,11 @@ def main():
     except KeyboardInterrupt:
         observer.stop()
         if event_handler.process:
-            event_handler.process.terminate()
+            print("\n  [Dev] Stopping...")
+            try:
+                os.killpg(os.getpgid(event_handler.process.pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
     observer.join()
 
 if __name__ == "__main__":

@@ -149,9 +149,15 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any] | None) -> List[
 
 async def main():
     """Starts the MCP server on Stdio transport."""
-    logger.info("Starting MCP Server (Stdio)...")
-    async with stdio_server() as (read, write):
-        await server.run(read, write, server.create_initialization_options())
+    try:
+        logger.info("Starting MCP Server (Stdio)...")
+        async with stdio_server() as (read, write):
+            logger.debug("Stdio streams established. Running server...")
+            await server.run(read, write, server.create_initialization_options())
+    except Exception as e:
+        logger.critical(f"FATAL: MCP Server crashed during startup: {e}", exc_info=True)
+        # We don't want to just exit silently, as that causes Errno 5 in Host
+        raise
 
 if __name__ == "__main__":
     asyncio.run(main())
