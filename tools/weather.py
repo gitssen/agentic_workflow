@@ -4,7 +4,7 @@ from config import setup_logger
 
 logger = setup_logger("Tool:Weather")
 
-def get_weather(location: str = None, date: str = "now", sub_agent=None) -> str:
+async def get_weather(location: str = None, date: str = "now", sub_agent=None) -> str:
     """
     Fetches weather data from wttr.in.
     If location is not provided, it can be resolved automatically using a sub-agent.
@@ -14,14 +14,14 @@ def get_weather(location: str = None, date: str = "now", sub_agent=None) -> str:
     """
     if not location:
         if sub_agent:
-            logger.info("  [Tool] Location missing. Asking sub-agent to find current location...")
-            res = sub_agent.solve("What is the user's current city and region?")
+            logger.debug("  [Tool] Location missing. Asking sub-agent to find current location...")
+            res = await sub_agent.solve("What is the user's current city and region?")
             location = res.replace("Final Answer:", "").strip()
-            logger.info(f"  [Tool] Sub-agent resolved location to: {location}")
+            logger.debug(f"  [Tool] Sub-agent resolved location to: {location}")
         else:
             return "Error: Location is required but no sub-agent available."
 
-    logger.info(f"  [Tool] Fetching weather for {location} (date: {date})...")
+    logger.debug(f"  [Tool] Fetching weather for {location} (date: {date})...")
     try:
         response = requests.get(f"https://wttr.in/{location}?format=j1")
         response.raise_for_status()

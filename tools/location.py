@@ -9,7 +9,7 @@ def get_current_location() -> str:
     Determines the user's approximate location (City, Region, Country) based on their public IP address.
     No arguments required.
     """
-    logger.info("  [Tool] Fetching location from IP...")
+    logger.debug("  [Tool] Fetching location from IP...")
     try:
         # Using ip-api.com (free for non-commercial use, no API key required)
         response = requests.get("http://ip-api.com/json/")

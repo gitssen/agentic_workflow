@@ -8,7 +8,7 @@ def search_knowledge_base(query: str) -> str:
     Args:
         query: The search term or question to look up.
     """
-    logger.info(f"  [Tool] Searching Google (via Gemini) for: {query}...")
+    logger.debug(f"  [Tool] Searching Google (via Gemini) for: {query}...")
 
     try:
         client = get_genai_client()

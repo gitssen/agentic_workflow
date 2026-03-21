@@ -41,7 +41,7 @@ def register_tool(func, collection_name="tools"):
     if doc.exists:
         existing_data = doc.to_dict()
         if existing_data.get("hash") == current_hash:
-            logger.info(f"  [Registry] Tool '{name}' is up to date. Skipping.")
+            logger.debug(f"  [Registry] Tool '{name}' is up to date. Skipping.")
             return
 
     sig = str(inspect.signature(func))
@@ -88,7 +88,7 @@ def main():
             
             # Find all functions in the module
             for name, obj in inspect.getmembers(module):
-                if inspect.isfunction(obj) and obj.__module__ == module_name:
+                if (inspect.isfunction(obj) or inspect.iscoroutinefunction(obj)) and obj.__module__ == module_name:
                     register_tool(obj)
 
 if __name__ == "__main__":

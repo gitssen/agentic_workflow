@@ -8,24 +8,29 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Logging Configuration ---
-LOG_FILE = os.path.join("logs", "agent.log")
+LOG_DIR = "logs"
+LOG_FILE = os.path.join(LOG_DIR, "agent.log")
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-LOG_LEVEL = logging.INFO
 
 def setup_logger(name: str):
-    """Sets up a logger with a RotatingFileHandler and a StreamHandler."""
+    """Sets up a logger with a RotatingFileHandler (DEBUG) and a StreamHandler (INFO)."""
     logger = logging.getLogger(name)
-    logger.setLevel(LOG_LEVEL)
+    logger.setLevel(logging.DEBUG) # Catch everything at the logger level
     
     # Prevent duplicate handlers if logger is already set up
     if not logger.handlers:
-        # Rotating File Handler (1MB per file, keep 3 backups)
+        if not os.path.exists(LOG_DIR):
+            os.makedirs(LOG_DIR)
+
+        # Rotating File Handler (Captures everything: DEBUG, INFO, WARNING, ERROR)
         file_handler = RotatingFileHandler(LOG_FILE, maxBytes=1*1024*1024, backupCount=3)
+        file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
         
-        # Stream Handler (for console output)
+        # Stream Handler (Captures only INFO and above for a clean CLI)
         stream_handler = logging.StreamHandler()
-        stream_handler.setFormatter(logging.Formatter("%(message)s")) # Keep console clean
+        stream_handler.setLevel(logging.INFO)
+        stream_handler.setFormatter(logging.Formatter("%(message)s"))
         
         logger.addHandler(file_handler)
         logger.addHandler(stream_handler)
