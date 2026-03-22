@@ -28,13 +28,13 @@ The "Hands" of the operation. It manages the tool execution environment.
 
 ## 🛠 Project Structure
 
-- `tools/`: **Vanilla Python** functions. Easy to test, portable to any framework.
-- `main.py`: The MCP Host/Agent loop.
-- `mcp_server.py`: The MCP Server process.
-- `agent_logic.py`: Shared ReAct reasoning logic.
-- `register_tools.py`: Tool registry manager. Performs hashing to skip redundant updates and generates vector embeddings for Tool-RAG.
-- `config.py`: Centralized configuration and **Rotating File Logging**.
-- `logs/`: Persisted log files (ignored by git).
+- `agent/tools/`: **Vanilla Python** functions. Easy to test, portable to any framework.
+- `agent/cli_host.py`: The MCP Host/Agent loop (CLI version).
+- `agent/mcp_server.py`: The MCP Server process.
+- `agent/agent_logic.py`: Shared ReAct reasoning logic.
+- `agent/register_tools.py`: Tool registry manager.
+- `backend/main.py`: FastAPI server that bridges the Frontend to the Agent logic.
+- `frontend/`: Next.js web interface for the agent.
 
 ---
 
@@ -44,6 +44,7 @@ The "Hands" of the operation. It manages the tool execution environment.
 1. **Gemini API Key**: Get one from [Google AI Studio](https://aistudio.google.com/).
 2. **Firebase Project**: A Firestore database named `default` with a **Vector Index** on the `embedding` field in the `tools` collection (Dimension: 768, Measure: COSINE).
 3. **Python 3.13+**
+4. **Node.js & npm** (for the frontend)
 
 ### Installation
 1. Clone the repository.
@@ -54,7 +55,8 @@ The "Hands" of the operation. It manages the tool execution environment.
    ```
 3. Install dependencies:
    ```bash
-   pip install -r requirements.txt # Or manually: pip install google-genai firebase-admin python-dotenv mcp sympy watchdog requests
+   pip install -r requirements.txt
+   cd frontend && npm install && cd ..
    ```
 
 ### Configuration
@@ -71,23 +73,47 @@ FIRESTORE_DATABASE_ID=default
 # GOOGLE_APPLICATION_CREDENTIALS=path/to/serviceAccountKey.json
 ```
 
-### 1. Register Tools (First Time Only)
+---
+
+## 🏃 Running the System
+
+### 1. Register Tools (Required once or after tool changes)
 Run the registry script to upload tool metadata and embeddings to Firestore:
 ```bash
-./venv/bin/python3 register_tools.py
-```
-*Note: This script uses SHA-256 hashing and will only update tools that have changed.*
-
-### 2. Start the Agent
-Run the Host script to start the interactive session:
-```bash
-./venv/bin/python3 main.py
+PYTHONPATH=agent ./venv/bin/python3 agent/register_tools.py
 ```
 
-### 3. Development Mode
-To automatically reload the agent and re-register tools when you make code changes:
+### 2. Start the Agent CLI (Direct Access)
+To interact with the agent directly in your terminal:
 ```bash
-./venv/bin/python3 dev.py
+PYTHONPATH=agent ./venv/bin/python3 agent/cli_host.py
+```
+
+### 3. Start the Web Application (Full Stack)
+
+The easiest way to start both the Backend and Frontend is using the provided `start.sh` script:
+```bash
+chmod +x start.sh
+./start.sh
+```
+
+Alternatively, you can start them manually:
+
+**Start the Backend:**
+```bash
+PYTHONPATH=agent ./venv/bin/python3 backend/main.py
+```
+
+**Start the Frontend:**
+```bash
+cd frontend && npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### 4. Development Mode (Auto-Reload)
+To automatically reload the agent CLI and re-register tools on change:
+```bash
+PYTHONPATH=agent ./venv/bin/python3 agent/cli_dev.py
 ```
 
 ---
