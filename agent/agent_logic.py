@@ -37,7 +37,7 @@ Important:
 2. Wait for the Observation before continuing.
 3. If you have enough information, provide the Final Answer immediately.
 4. If you are missing information that cannot be resolved via tools (e.g. you need the user to provide a specific parameter), use 'Final Answer' to ask the user for that information.
-5. Efficiency Rule: Prioritize '[Self-Resolving]' tools. If a tool can find its own missing data, call it directly.
+6. Silence Rule: If your tools return 'No results' or 'Error', DO NOT assume that something does not exist. Instead, report that your tools were unable to find information and consider trying a different, broader search query.
 """
 
 def load_persona(name: str = "general") -> str:
@@ -116,13 +116,36 @@ class GenericReActAgent:
             
             try:
                 action_match = re.search(r"Action:\s*(\w+)", raw_output)
+                # Improved regex to find the first JSON object and stop at the first closing brace that matches the opening one
+                # This helps avoid 'Extra data' errors if the model adds text after the JSON.
                 input_match = re.search(r"Action Input:\s*({.*})", raw_output, re.DOTALL)
                 
                 if not action_match or not input_match:
                     raise ValueError("Incomplete Action/Action Input format.")
                 
                 action_name = action_match.group(1).strip()
-                action_args = json.loads(input_match.group(1).strip())
+                json_str = input_match.group(1).strip()
+                
+                # Surgical JSON extraction: find the matching closing brace for the first '{'
+                # This is more robust than just taking everything to the end of the string.
+                brace_count = 0
+                first_brace_idx = json_str.find('{')
+                actual_json = ""
+                if first_brace_idx != -1:
+                    for i in range(first_brace_idx, len(json_str)):
+                        if json_str[i] == '{':
+                            brace_count += 1
+                        elif json_str[i] == '}':
+                            brace_count -= 1
+                        
+                        if brace_count == 0:
+                            actual_json = json_str[first_brace_idx : i+1]
+                            break
+                
+                if not actual_json:
+                    actual_json = json_str # Fallback to original match
+
+                action_args = json.loads(actual_json)
                 
                 observation = await self.execute_func(action_name, action_args)
                 

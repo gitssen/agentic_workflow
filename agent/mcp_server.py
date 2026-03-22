@@ -93,7 +93,23 @@ class ToolManager:
                 if p_name == "sub_agent":
                     continue # Internal capability, not exposed via MCP JSON
                 
-                properties[p_name] = {"type": "string", "description": p_name}
+                # Infer type from annotation or default value
+                p_type = "string"
+                if p.annotation == int:
+                    p_type = "integer"
+                elif p.annotation == float:
+                    p_type = "number"
+                elif p.annotation == bool:
+                    p_type = "boolean"
+                elif p.default != inspect.Parameter.empty:
+                    if isinstance(p.default, int):
+                        p_type = "integer"
+                    elif isinstance(p.default, float):
+                        p_type = "number"
+                    elif isinstance(p.default, bool):
+                        p_type = "boolean"
+
+                properties[p_name] = {"type": p_type, "description": p_name}
                 if p.default == inspect.Parameter.empty:
                     required.append(p_name)
 

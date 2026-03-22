@@ -1,8 +1,16 @@
 #!/bin/bash
 
-# Kill any existing processes
+# Aggressively kill any existing processes
+echo "🧹 Cleaning up existing processes..."
 pkill -f "backend/main.py"
 pkill -f "mcp_server.py"
+pkill -f "next dev"
+pkill -f "node"
+
+# Kill anything on our ports
+lsof -ti :8000 | xargs kill -9 2>/dev/null
+lsof -ti :3000 | xargs kill -9 2>/dev/null
+lsof -ti :3001 | xargs kill -9 2>/dev/null
 
 echo "🚀 Starting Agentic Workflow..."
 
