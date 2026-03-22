@@ -58,11 +58,15 @@ The "Hands" of the operation. It manages the tool execution environment.
    ```
 
 ### Configuration
-Create a `.env` file in the root directory:
+Create a `.env` file in the root directory (see `.env.placeholder` for a full list):
 ```env
 GEMINI_API_KEY=your_key_here
-GOOGLE_APPLICATION_CREDENTIALS=path/to/serviceAccountKey.json
+GOOGLE_PROJECT_ID=your_project_id_here
+GOOGLE_MAPS_API_KEY=your_maps_api_key_here
+UBER_API_KEY=your_uber_key_here
+RAINFOREST_API_KEY=your_rainforest_key_here
 FIRESTORE_DATABASE_ID=default
+GOOGLE_APPLICATION_CREDENTIALS=path/to/serviceAccountKey.json
 ```
 
 ### 1. Register Tools (First Time Only)
