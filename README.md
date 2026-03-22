@@ -66,7 +66,9 @@ GOOGLE_MAPS_API_KEY=your_maps_api_key_here
 UBER_API_KEY=your_uber_key_here
 RAINFOREST_API_KEY=your_rainforest_key_here
 FIRESTORE_DATABASE_ID=default
-GOOGLE_APPLICATION_CREDENTIALS=path/to/serviceAccountKey.json
+
+# Optional: Only needed if not authenticated via gcloud CLI
+# GOOGLE_APPLICATION_CREDENTIALS=path/to/serviceAccountKey.json
 ```
 
 ### 1. Register Tools (First Time Only)
