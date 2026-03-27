@@ -5,7 +5,6 @@ echo "🧹 Cleaning up existing processes..."
 pkill -f "backend/main.py"
 pkill -f "mcp_server.py"
 pkill -f "next dev"
-pkill -f "node"
 
 # Kill anything on our ports
 lsof -ti :8000 | xargs kill -9 2>/dev/null
@@ -17,7 +16,7 @@ echo "🚀 Starting Agentic Workflow..."
 # Start Backend (FastAPI + MCP Host)
 # The backend will automatically start the MCP Server subprocess
 echo "Starting Backend (FastAPI)..."
-./venv/bin/python3 backend/main.py &
+./.venv/bin/python3 backend/main.py &
 BACKEND_PID=$!
 
 # Start Frontend (Next.js)

@@ -35,7 +35,7 @@ class MCPManager:
 
     async def connect(self):
         server_params = StdioServerParameters(
-            command="./venv/bin/python3",
+            command="./.venv/bin/python3",
             args=["agent/mcp_server.py"],
             env={**os.environ}
         )
@@ -108,8 +108,11 @@ async def get_personas():
     """Lists available personas from the agent/prompts directory."""
     prompts_dir = os.path.join(os.path.dirname(__file__), "..", "agent", "prompts")
     if not os.path.exists(prompts_dir):
+        logger.warning(f"Prompts directory not found: {prompts_dir}")
         return ["general"]
-    return [f[:-3] for f in os.listdir(prompts_dir) if f.endswith(".md")]
+    personas = [f[:-3] for f in os.listdir(prompts_dir) if f.endswith(".md")]
+    logger.info(f"Returning personas: {personas}")
+    return personas
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
