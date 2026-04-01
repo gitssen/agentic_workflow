@@ -3,7 +3,7 @@ import datetime
 import json
 from bs4 import BeautifulSoup
 from typing import List, Dict, Any, Optional
-from config import get_genai_client, MODEL_ID
+from agent.config import get_genai_client, MODEL_ID
 
 def get_breaking_news(topic: str, region: str = "US") -> str:
     """

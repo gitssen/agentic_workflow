@@ -17,8 +17,12 @@ from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
-from config import setup_logger, MODEL_ID, EMBEDDING_MODEL_ID, FIRESTORE_DATABASE_ID
-from agent_logic import SubAgent
+import sys
+# Ensure the project root is in sys.path
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from agent.config import setup_logger, MODEL_ID, EMBEDDING_MODEL_ID, FIRESTORE_DATABASE_ID
+from agent.agent_logic import SubAgent
 
 logger = setup_logger("MCPServer")
 
@@ -43,6 +47,7 @@ class ToolManager:
 
     def load_tools(self):
         """Scans the tools directory and imports all Python functions."""
+        logger.debug(f"Loading tools from {self.tools_dir}. sys.path: {sys.path}")
         if not os.path.exists(self.tools_dir):
             logger.error(f"Tools directory '{self.tools_dir}' not found.")
             return
@@ -50,14 +55,18 @@ class ToolManager:
         for filename in os.listdir(self.tools_dir):
             if filename.endswith(".py") and filename != "__init__.py":
                 module_name = filename[:-3]
+                # Use absolute import path for tools
+                full_module_name = f"agent.tools.{module_name}"
                 file_path = os.path.join(self.tools_dir, filename)
-                spec = importlib.util.spec_from_file_location(module_name, file_path)
+                spec = importlib.util.spec_from_file_location(full_module_name, file_path)
                 module = importlib.util.module_from_spec(spec)
+                # Ensure the module knows it's part of the package
+                module.__package__ = "agent.tools"
                 spec.loader.exec_module(module)
                 
                 for name, obj in inspect.getmembers(module):
                     # We accept both sync and async functions
-                    if (inspect.isfunction(obj) or inspect.iscoroutinefunction(obj)) and obj.__module__ == module_name:
+                    if (inspect.isfunction(obj) or inspect.iscoroutinefunction(obj)) and obj.__module__ == full_module_name:
                         self.tools[name] = obj
                         logger.info(f"Loaded tool: {name}")
 
@@ -66,7 +75,7 @@ class ToolManager:
         Performs Vector Search (RAG) in Firestore for internal sub-tasks.
         This allows SubAgents running inside the server to find tools dynamically.
         """
-        from config import get_genai_client
+        from agent.config import get_genai_client
         client = get_genai_client()
         embedding_response = client.models.embed_content(
             model=EMBEDDING_MODEL_ID, contents=query, config={"output_dimensionality": 768}
@@ -128,6 +137,7 @@ async def internal_execute(name: str, args: Dict[str, Any]) -> str:
     """
     Executes a tool within the server context.
     Handles 'sub_agent' injection and async/sync execution.
+    Also handles mapping 'query' to the first parameter for robustness.
     """
     if name not in tool_manager.tools:
         return f"Error: Tool {name} not found."
@@ -137,16 +147,26 @@ async def internal_execute(name: str, args: Dict[str, Any]) -> str:
     
     # Prepare arguments
     kwargs = args or {}
+    
+    # Robustness: Map 'query' to the first parameter if it exists and is missing
+    if "query" in kwargs and len(sig.parameters) > 0:
+        first_param = list(sig.parameters.keys())[0]
+        if first_param not in kwargs and first_param != "sub_agent":
+            kwargs[first_param] = kwargs.pop("query")
+
     if "sub_agent" in sig.parameters:
         # Provide a SubAgent that knows how to call other tools on THIS server
         sub = SubAgent(tool_manager, MODEL_ID, depth=1, execute_func=internal_execute)
         kwargs["sub_agent"] = sub
     
+    # Final filtering: Only pass arguments that the function actually accepts
+    valid_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    
     # Execute and handle both synchronous and asynchronous tools
     if inspect.iscoroutinefunction(func):
-        result = await func(**kwargs)
+        result = await func(**valid_kwargs)
     else:
-        result = func(**kwargs)
+        result = func(**valid_kwargs)
     
     return str(result)
 

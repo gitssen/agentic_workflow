@@ -1,6 +1,6 @@
 import requests
 import json
-from config import setup_logger
+from agent.config import setup_logger
 
 logger = setup_logger("Tool:Location")
 

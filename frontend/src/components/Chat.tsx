@@ -49,6 +49,13 @@ export default function Chat() {
     setInput("");
     setIsLoading(true);
 
+    let assistantMessage: Message = {
+      id: (Date.now() + 1).toString(),
+      role: "assistant",
+      content: "",
+      thought: "",
+    };
+
     try {
       const response = await fetch("http://localhost:8000/chat", {
         method: "POST",
@@ -58,15 +65,56 @@ export default function Chat() {
 
       if (!response.ok) throw new Error("Backend failed");
 
-      const data = await response.json();
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: data.response,
-        thought: data.thought,
-      };
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No reader available");
 
-      setMessages((prev) => [...prev, assistantMessage]);
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const jsonStr = line.substring(6);
+            try {
+              const step = JSON.parse(jsonStr);
+              
+              if (step.type === "thought") {
+                assistantMessage.thought += (assistantMessage.thought ? "\n" : "") + step.content;
+              } else if (step.type === "action") {
+                assistantMessage.thought += `\n> **Action**: ${step.content}\n> **Args**: ${JSON.stringify(step.args)}`;
+              } else if (step.type === "observation") {
+                assistantMessage.thought += `\n> **Observation**: ${step.content}\n`;
+              } else if (step.type === "final_answer") {
+                assistantMessage.content = step.content;
+              } else if (step.type === "error") {
+                assistantMessage.content = `### Error\n${step.content}`;
+              }
+
+              // Update the last message in the list
+              setMessages((prev) => {
+                const otherMessages = prev.slice(0, -1);
+                // If the last message is already our assistant message, update it.
+                // Otherwise, it means this is the first chunk, so we append it.
+                const lastMsg = prev[prev.length - 1];
+                if (lastMsg && lastMsg.role === "assistant" && lastMsg.id === assistantMessage.id) {
+                  return [...otherMessages, { ...assistantMessage }];
+                } else {
+                  return [...prev, { ...assistantMessage }];
+                }
+              });
+            } catch (e) {
+              console.error("Error parsing JSON chunk", e);
+            }
+          }
+        }
+      }
     } catch (error) {
       console.error("Chat error:", error);
       setMessages((prev) => [

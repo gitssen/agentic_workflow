@@ -1,8 +1,13 @@
 import os
+import sys
 import inspect
 import importlib.util
 import hashlib
 from dotenv import load_dotenv
+
+# Ensure the project root is in sys.path
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -10,7 +15,7 @@ from firebase_admin import credentials, firestore
 load_dotenv()
 
 from google.cloud.firestore_v1.vector import Vector
-from config import get_genai_client, EMBEDDING_MODEL_ID, FIRESTORE_DATABASE_ID, setup_logger
+from agent.config import get_genai_client, EMBEDDING_MODEL_ID, FIRESTORE_DATABASE_ID, setup_logger
 
 # Initialize logger for registry script
 logger = setup_logger("Registry")
@@ -44,9 +49,22 @@ def register_tool(func, collection_name="tools"):
             logger.debug(f"  [Registry] Tool '{name}' is up to date. Skipping.")
             return
 
-    sig = str(inspect.signature(func))
+    sig_obj = inspect.signature(func)
+    properties = {}
+    required = []
+    for p_name, p in sig_obj.parameters.items():
+        if p_name == "sub_agent":
+            continue
+        p_type = "string"
+        if p.annotation == int: p_type = "integer"
+        elif p.annotation == float: p_type = "number"
+        elif p.annotation == bool: p_type = "boolean"
+        properties[p_name] = {"type": p_type}
+        if p.default == inspect.Parameter.empty:
+            required.append(p_name)
+
     doc_str = func.__doc__.strip() if func.__doc__ else "No description available."
-    full_description = f"{name}{sig}: {doc_str}"
+    full_description = f"{name}{str(sig_obj)}: {doc_str}"
     
     logger.info(f"  [Registry] Registering/Updating tool: {name} (New Hash: {current_hash[:8]}...)")
     
@@ -63,7 +81,9 @@ def register_tool(func, collection_name="tools"):
     # Store in Firestore
     doc_ref.set({
         "name": name,
-        "signature": sig,
+        "signature": str(sig_obj),
+        "properties": properties,
+        "required": required,
         "description": doc_str,
         "full_doc": full_description,
         "embedding": Vector(embedding),
@@ -71,7 +91,8 @@ def register_tool(func, collection_name="tools"):
     })
 
 def main():
-    tools_dir = "tools"
+    # Use the tools directory within the same folder as this script
+    tools_dir = os.path.join(os.path.dirname(__file__), "tools")
     if not os.path.exists(tools_dir):
         logger.error(f"Error: {tools_dir} directory not found.")
         return

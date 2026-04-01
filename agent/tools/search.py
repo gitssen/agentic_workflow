@@ -1,4 +1,4 @@
-from config import get_genai_client, MODEL_ID, setup_logger
+from agent.config import get_genai_client, MODEL_ID, setup_logger
 
 logger = setup_logger("Tool:Search")
 

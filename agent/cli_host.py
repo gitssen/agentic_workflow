@@ -13,8 +13,8 @@ import firebase_admin
 from firebase_admin import firestore
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from config import setup_logger, MODEL_ID, EMBEDDING_MODEL_ID, FIRESTORE_DATABASE_ID
-from agent_logic import GenericReActAgent
+from agent.config import setup_logger, MODEL_ID, EMBEDDING_MODEL_ID, FIRESTORE_DATABASE_ID
+from agent.agent_logic import GenericReActAgent
 from google.cloud.firestore_v1.vector import Vector
 from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
 
@@ -51,7 +51,7 @@ class HostRegistry:
         self.collection = db.collection(collection_name)
 
     async def get_relevant_tools(self, query: str, limit: int = 3) -> list[dict[str, Any]]:
-        from config import get_genai_client
+        from agent.config import get_genai_client
         client = get_genai_client()
         embedding_response = client.models.embed_content(
             model=EMBEDDING_MODEL_ID, contents=query, config={"output_dimensionality": 768}

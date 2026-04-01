@@ -10,3 +10,7 @@ requests
 beautifulsoup4
 lxml
 sympy
+langgraph
+langchain
+langchain-google-genai
+langchain-core

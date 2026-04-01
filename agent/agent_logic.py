@@ -1,44 +1,24 @@
 """
-Agent Logic Module: Implements the core ReAct (Reasoning and Acting) framework.
-This module is shared between the MCP Host and the MCP Server.
-Now supports dynamic Personas via external prompt files.
+Agent Logic Module: Implements the core ReAct framework using LangGraph.
+This version replaces the manual loop with a compiled StateGraph for better 
+state management and future multi-agent scalability.
 """
 
 import os
-import re
 import json
-import inspect
-from typing import List, Dict, Any, Optional, Callable, Awaitable
-from config import get_genai_client, MODEL_ID, setup_logger
+import asyncio
+from typing import List, Dict, Any, Optional, Annotated, Sequence, TypedDict, Union, Type
+from pydantic import BaseModel, Field, create_model
 
-logger = setup_logger("AgentLogic")
+# LangChain & LangGraph Imports
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
+from langchain_core.tools import Tool as LCTool, StructuredTool
+from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages
+from langchain_core.runnables import RunnableConfig
 
-# --- 1. Base ReAct Protocol (Fixed) ---
-# This part of the prompt NEVER changes, as it defines the "brain's" operating logic.
-BASE_PROTOCOL = """
-You solve problems by following a structured ReAct (Reasoning and Acting) loop.
-You have access to the following tools:
-
-{tool_definitions}
-
-You MUST follow this exact format for every turn:
-
-Thought: [Your reasoning about what to do next]
-Action: [The name of the tool to use]
-Action Input: [The JSON arguments for the tool]
-Observation: [The result of the tool - THIS WILL BE PROVIDED TO YOU]
-
-... (repeat Thought/Action/Action Input/Observation if needed)
-
-Final Answer: [Your final response to the user, addressing their ORIGINAL query comprehensively]
-
-Important: 
-1. Only provide ONE Thought/Action/Action Input per turn. 
-2. Wait for the Observation before continuing.
-3. If you have enough information, provide the Final Answer immediately.
-4. If you are missing information that cannot be resolved via tools (e.g. you need the user to provide a specific parameter), use 'Final Answer' to ask the user for that information.
-6. Silence Rule: If your tools return 'No results' or 'Error', DO NOT assume that something does not exist. Instead, report that your tools were unable to find information and consider trying a different, broader search query.
-"""
+from agent.config import setup_logger, MODEL_ID
 
 def load_persona(name: str = "general") -> str:
     """Loads a persona description from the prompts directory."""
@@ -56,8 +36,201 @@ def load_persona(name: str = "general") -> str:
         logger.error(f"Error loading persona '{name}': {e}")
         return "You are a helpful AI assistant."
 
+logger = setup_logger("AgentLogic")
+
+# Ensure API Key is available for LangChain (which defaults to GOOGLE_API_KEY)
+if "GEMINI_API_KEY" in os.environ and "GOOGLE_API_KEY" not in os.environ:
+    os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
+
+# --- 1. State Definition ---
+class AgentState(TypedDict):
+    """The state of the agent graph."""
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    persona_text: str
+    tools: List[LCTool]
+
+# --- 2. Tool Wrapper ---
+def create_tool_wrapper(name: str, description: str, execute_func: Any, metadata: Dict[str, Any]):
+    """Wraps an MCP tool execution function into a LangChain StructuredTool using metadata."""
+    async def _arun(**kwargs):
+        # StructuredTool passes arguments as kwargs
+        return await execute_func(name, kwargs)
+
+    # Reconstruct the schema from metadata
+    properties = metadata.get("properties", {})
+    required = metadata.get("required", [])
+    
+    # Map types to Python types
+    type_map = {
+        "string": str,
+        "integer": int,
+        "number": float,
+        "boolean": bool
+    }
+    
+    fields = {}
+    for p_name, p_info in properties.items():
+        # Gemini works best with string types if we are unsure
+        # We also add a description to help the model
+        if p_name in required:
+            fields[p_name] = (str, Field(..., description=p_name))
+        else:
+            fields[p_name] = (str, Field(default="", description=p_name))
+            
+    # Create dynamic Pydantic model
+    args_schema = create_model(f"{name}_args", **fields) if fields else None
+    
+    return StructuredTool.from_function(
+        name=name,
+        description=description,
+        coroutine=_arun,
+        func=lambda **kwargs: None,
+        args_schema=args_schema
+    )
+
+# --- 3. LangGraph ReAct Agent ---
+class GenericReActAgent:
+    def __init__(self, registry: Any, execute_func: Any, model_id: str = MODEL_ID, depth: int = 0, persona: str = "general"):
+        self.registry = registry
+        self.execute_func = execute_func
+        self.depth = depth
+        self.persona_name = persona
+        self.persona_text = load_persona(persona)
+        
+        # Initialize the LangChain LLM
+        # Note: We use MODEL_ID from config, but LangChain uses 'models/name' format for Gemini
+        langchain_model = model_id if model_id.startswith("models/") else f"models/{model_id}"
+        self.llm = ChatGoogleGenerativeAI(
+            model=langchain_model,
+            temperature=0
+        )
+        
+        self.graph = None
+
+    def _build_graph(self, tools: List[LCTool]):
+        """Builds and compiles the LangGraph StateGraph."""
+        workflow = StateGraph(AgentState)
+
+        # Define the nodes
+        async def call_model(state: AgentState, config: RunnableConfig):
+            # Prepend system message for persona
+            messages = [SystemMessage(content=state["persona_text"])] + list(state["messages"])
+            llm_with_tools = self.llm.bind_tools(state["tools"])
+            response = await llm_with_tools.ainvoke(messages, config)
+            return {"messages": [response]}
+
+        async def execute_tools(state: AgentState):
+            last_message = state["messages"][-1]
+            tool_messages = []
+            
+            for tool_call in last_message.tool_calls:
+                tool = next(t for t in state["tools"] if t.name == tool_call["name"])
+                observation = await tool.ainvoke(tool_call["args"])
+                tool_messages.append(ToolMessage(
+                    content=str(observation),
+                    tool_call_id=tool_call["id"]
+                ))
+            
+            return {"messages": tool_messages}
+
+        def should_continue(state: AgentState):
+            last_message = state["messages"][-1]
+            if last_message.tool_calls:
+                return "tools"
+            return END
+
+        workflow.add_node("agent", call_model)
+        workflow.add_node("tools", execute_tools)
+
+        workflow.set_entry_point("agent")
+        workflow.add_conditional_edges("agent", should_continue)
+        workflow.add_edge("tools", "agent")
+
+        return workflow.compile()
+
+    async def run_full(self, user_input: str) -> str:
+        """Helper to run the agent to completion and return only the final answer."""
+        final_answer = "Max reasoning steps reached."
+        async for step in self.run(user_input):
+            if step["type"] == "final_answer":
+                final_answer = step["content"]
+        return final_answer
+
+    async def run(self, user_input: str):
+        """
+        Asynchronous generator that yields each step of the reasoning process.
+        This maps LangGraph internal events to our existing SSE format.
+        """
+        # 1. Tool Discovery (Tool-RAG)
+        relevant_tool_metadata = await self.registry.get_relevant_tools(user_input)
+        lc_tools = [
+            create_tool_wrapper(t["name"], t.get("full_doc", t["description"]), self.execute_func, t)
+            for t in relevant_tool_metadata
+        ]
+
+        # 2. Compile Graph with discovered tools
+        self.graph = self._build_graph(lc_tools)
+        
+        initial_state = {
+            "messages": [HumanMessage(content=user_input)],
+            "persona_text": self.persona_text,
+            "tools": lc_tools
+        }
+
+        # 3. Stream the Graph execution
+        try:
+            async for event in self.graph.astream(initial_state, stream_mode="updates"):
+                if "agent" in event:
+                    message = event["agent"]["messages"][-1]
+                    
+                    # Emit Thought (Gemini often puts reasoning in .content even with tool calls)
+                    thought_text = ""
+                    if isinstance(message.content, str):
+                        thought_text = message.content
+                    elif isinstance(message.content, list):
+                        for part in message.content:
+                            if isinstance(part, str):
+                                thought_text += part
+                            elif isinstance(part, dict) and part.get("type") == "text":
+                                thought_text += part.get("text", "")
+                    
+                    thought = thought_text if thought_text else "Deciding next steps..."
+                    yield {"type": "thought", "content": thought}
+
+                    # Emit Actions if any
+                    if message.tool_calls:
+                        for tc in message.tool_calls:
+                            yield {
+                                "type": "action", 
+                                "content": f"Using tool: {tc['name']}", 
+                                "tool": tc['name'], 
+                                "args": tc['args']
+                            }
+                    else:
+                        # No tool calls means this is the final answer
+                        final_text = ""
+                        if isinstance(message.content, str):
+                            final_text = message.content
+                        elif isinstance(message.content, list):
+                            for part in message.content:
+                                if isinstance(part, str):
+                                    final_text += part
+                                elif isinstance(part, dict) and part.get("type") == "text":
+                                    final_text += part.get("text", "")
+                        
+                        yield {"type": "final_answer", "content": final_text}
+
+                elif "tools" in event:
+                    # Emit Observations
+                    for msg in event["tools"]["messages"]:
+                        yield {"type": "observation", "content": msg.content}
+        except Exception as e:
+            logger.error(f"Graph Execution Error: {e}")
+            yield {"type": "error", "content": str(e)}
+
 class SubAgent:
-    def __init__(self, registry: Any, model_id: str, depth: int, execute_func: Callable[[str, Dict[str, Any]], Awaitable[str]], persona: str = "general"):
+    """Compatibility wrapper for recursive reasoning."""
+    def __init__(self, registry: Any, model_id: str, depth: int, execute_func: Any, persona: str = "general"):
         self.registry = registry
         self.model_id = model_id
         self.depth = depth
@@ -65,98 +238,5 @@ class SubAgent:
         self.persona = persona
 
     async def solve(self, goal: str) -> str:
-        logger.debug(f"    [Sub-Agent (Depth {self.depth})] Goal: {goal}")
-        # Sub-agents inherit the persona of their parent
         agent = GenericReActAgent(self.registry, self.execute_func, self.model_id, depth=self.depth, persona=self.persona)
-        return await agent.run(goal)
-
-class GenericReActAgent:
-    def __init__(self, registry: Any, execute_func: Callable[[str, Dict[str, Any]], Awaitable[str]], model_id: str = MODEL_ID, depth: int = 0, persona: str = "general"):
-        self.client = get_genai_client()
-        self.model_id = model_id
-        self.registry = registry
-        self.execute_func = execute_func
-        self.depth = depth
-        self.persona_name = persona
-        self.persona_text = load_persona(persona)
-        self.chat_history = []
-        
-    def _format_docs(self, tools: List[Dict[str, Any]]) -> str:
-        docs = []
-        for t in tools:
-            sig = t.get("signature", "") or ""
-            capability = " [Self-Resolving]" if "sub_agent" in sig else ""
-            docs.append(f"- {t.get('full_doc', t.get('name'))}{capability}")
-        return "\n".join(docs)
-
-    async def run(self, user_input: str) -> str:
-        relevant_tools = await self.registry.get_relevant_tools(user_input)
-        tool_docs = self._format_docs(relevant_tools)
-        
-        task_history = [f"User: {user_input}"]
-        indent = "  " * self.depth
-
-        # Combine Persona with the Base Protocol
-        system_prompt = f"{self.persona_text}\n\n{BASE_PROTOCOL.format(tool_definitions=tool_docs)}"
-
-        for i in range(8):
-            full_context = self.chat_history + task_history
-            prompt = (system_prompt + "\n\n" + "\n".join(full_context) + "\nThought:")
-            
-            response = self.client.models.generate_content(model=self.model_id, contents=prompt)
-            raw_output = "Thought: " + response.text.strip()
-            logger.debug(f"\n{indent}--- Step {i+1} (Depth {self.depth}) ---\n{indent}{raw_output}")
-            
-            if "Final Answer:" in raw_output:
-                final_answer = raw_output.split("Final Answer:")[-1].strip()
-                if self.depth == 0:
-                    self.chat_history.append(f"User: {user_input}")
-                    self.chat_history.append(f"Assistant: {final_answer}")
-                return final_answer
-            
-            try:
-                action_match = re.search(r"Action:\s*(\w+)", raw_output)
-                # Improved regex to find the first JSON object and stop at the first closing brace that matches the opening one
-                # This helps avoid 'Extra data' errors if the model adds text after the JSON.
-                input_match = re.search(r"Action Input:\s*({.*})", raw_output, re.DOTALL)
-                
-                if not action_match or not input_match:
-                    raise ValueError("Incomplete Action/Action Input format.")
-                
-                action_name = action_match.group(1).strip()
-                json_str = input_match.group(1).strip()
-                
-                # Surgical JSON extraction: find the matching closing brace for the first '{'
-                # This is more robust than just taking everything to the end of the string.
-                brace_count = 0
-                first_brace_idx = json_str.find('{')
-                actual_json = ""
-                if first_brace_idx != -1:
-                    for i in range(first_brace_idx, len(json_str)):
-                        if json_str[i] == '{':
-                            brace_count += 1
-                        elif json_str[i] == '}':
-                            brace_count -= 1
-                        
-                        if brace_count == 0:
-                            actual_json = json_str[first_brace_idx : i+1]
-                            break
-                
-                if not actual_json:
-                    actual_json = json_str # Fallback to original match
-
-                action_args = json.loads(actual_json)
-                
-                observation = await self.execute_func(action_name, action_args)
-                
-                task_history.append(raw_output)
-                task_history.append(f"Observation: {observation}")
-                logger.debug(f"{indent}Observation: {observation}")
-                
-            except Exception as e:
-                obs = f"Error: {str(e)}"
-                task_history.append(raw_output)
-                task_history.append(f"Observation: {obs}")
-                logger.error(f"{indent}Execution Error: {obs}")
-
-        return "Max reasoning steps reached."
+        return await agent.run_full(goal)
