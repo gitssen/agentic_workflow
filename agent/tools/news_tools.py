@@ -3,7 +3,7 @@ import datetime
 import json
 from bs4 import BeautifulSoup
 from typing import List, Dict, Any, Optional
-from agent.config import get_genai_client, MODEL_ID
+from agent.config import get_genai_client, MODEL_ID, setup_logger
 
 def get_breaking_news(topic: str, region: str = "US") -> str:
     """
@@ -51,26 +51,42 @@ def analyze_article_content(url: str) -> str:
     Scrapes and extracts the main text content from a specific news article URL.
     Use this to get deeper details once you have a specific source.
     """
+    # Skip grounding redirect URLs as they are not direct articles
+    if "vertexaisearch.cloud.google.com" in url:
+        return "Error: Cannot analyze grounding redirect URLs directly. Please use the results from 'get_breaking_news' instead."
+
+    logger = setup_logger("Tool:News")
+    logger.debug(f"  [Tool] Analyzing article: {url}...")
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.37 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.37'
         }
-        response = requests.get(url, headers=headers, timeout=10)
+        # Use a shorter timeout
+        response = requests.get(url, headers=headers, timeout=7)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.text, 'lxml')
         
-        for script in soup(["script", "style"]):
+        # Remove script and style elements
+        for script in soup(["script", "style", "nav", "footer", "header"]):
             script.extract()
             
+        # Get text
         text = soup.get_text()
+        
+        # Break into lines and remove leading and trailing whitespace
         lines = (line.strip() for line in text.splitlines())
+        # Break multi-headlines into a line each
         chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        # Drop blank lines
         text = '\n'.join(chunk for chunk in chunks if chunk)
         
-        return text[:3000] + ("..." if len(text) > 3000 else "")
+        result = text[:2500] + ("..." if len(text) > 2500 else "")
+        logger.debug(f"  [Tool] Successfully extracted {len(result)} chars from {url}")
+        return result
     except Exception as e:
-        return f"Error analyzing article at {url}: {str(e)}"
+        logger.error(f"Error analyzing article at {url}: {str(e)}")
+        return f"Error analyzing article: {str(e)}"
 
 async def cross_reference_query(query: str, sub_agent=None) -> str:
     """

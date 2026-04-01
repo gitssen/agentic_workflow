@@ -159,8 +159,13 @@ class GenericReActAgent:
     async def run(self, user_input: str):
         """
         Asynchronous generator that yields each step of the reasoning process.
-        This maps LangGraph internal events to our existing SSE format.
+        Uses astream_events to provide token-level thought streaming.
         """
+        # Safety: check depth
+        if self.depth > 3:
+            yield {"type": "error", "content": "Maximum recursion depth reached."}
+            return
+
         # 1. Tool Discovery (Tool-RAG)
         relevant_tool_metadata = await self.registry.get_relevant_tools(user_input)
         lc_tools = [
@@ -168,65 +173,87 @@ class GenericReActAgent:
             for t in relevant_tool_metadata
         ]
 
-        # 2. Compile Graph with discovered tools
-        self.graph = self._build_graph(lc_tools)
-        
+        # 2. Setup Graph and State
+        graph = self._build_graph(lc_tools)
         initial_state = {
             "messages": [HumanMessage(content=user_input)],
             "persona_text": self.persona_text,
             "tools": lc_tools
         }
 
-        # 3. Stream the Graph execution
-        try:
-            async for event in self.graph.astream(initial_state, stream_mode="updates"):
-                if "agent" in event:
-                    message = event["agent"]["messages"][-1]
-                    
-                    # Emit Thought (Gemini often puts reasoning in .content even with tool calls)
-                    thought_text = ""
-                    if isinstance(message.content, str):
-                        thought_text = message.content
-                    elif isinstance(message.content, list):
-                        for part in message.content:
-                            if isinstance(part, str):
-                                thought_text += part
-                            elif isinstance(part, dict) and part.get("type") == "text":
-                                thought_text += part.get("text", "")
-                    
-                    thought = thought_text if thought_text else "Deciding next steps..."
-                    yield {"type": "thought", "content": thought}
+        # 3. Stream Events
+        # We use astream_events to get both node updates and token chunks
+        indent = "  " * self.depth
+        current_thought = ""
+        
+        async for event in graph.astream_events(initial_state, version="v2"):
+            kind = event["event"]
+            
+            # --- Handle Token Streaming (Thoughts) ---
+            if kind == "on_chat_model_stream" and self.depth == 0:
+                # We only stream tokens for the top-level agent to avoid UI clutter
+                content = event["data"]["chunk"].content
+                if isinstance(content, str) and content:
+                    current_thought += content
+                    yield {"type": "thought", "content": current_thought}
+                elif isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            current_thought += part["text"]
+                            yield {"type": "thought", "content": current_thought}
 
-                    # Emit Actions if any
+            # --- Handle Node Updates (Actions, Observations, Final Answers) ---
+            elif kind == "on_chain_end" and event["name"] == "LangGraph":
+                # The final output of the graph is sometimes useful but we usually 
+                # get better detail from node-level updates.
+                pass
+
+            elif kind == "on_node_end":
+                node_name = event["name"]
+                output = event["data"]["output"]
+                
+                if node_name == "agent":
+                    message = output["messages"][-1]
+                    
+                    # If we weren't streaming tokens, or if this is an action, yield it
                     if message.tool_calls:
                         for tc in message.tool_calls:
                             yield {
                                 "type": "action", 
-                                "content": f"Using tool: {tc['name']}", 
+                                "content": f"{indent}Using tool: {tc['name']}", 
                                 "tool": tc['name'], 
                                 "args": tc['args']
                             }
-                    else:
-                        # No tool calls means this is the final answer
-                        final_text = ""
-                        if isinstance(message.content, str):
-                            final_text = message.content
-                        elif isinstance(message.content, list):
-                            for part in message.content:
-                                if isinstance(part, str):
-                                    final_text += part
-                                elif isinstance(part, dict) and part.get("type") == "text":
-                                    final_text += part.get("text", "")
+                            yield {
+                                "type": "delegation",
+                                "content": f"{indent}Delegating to {tc['name']}..."
+                            }
+                    elif not current_thought:
+                        # Fallback for non-streaming models or hidden reasoning
+                        final_text = self._flatten_content(message.content)
+                        yield {"type": "thought", "content": final_text}
                         
+                    # If no tool calls, it's the final answer for THIS agent/sub-agent
+                    if not message.tool_calls:
+                        final_text = self._flatten_content(message.content)
                         yield {"type": "final_answer", "content": final_text}
 
-                elif "tools" in event:
-                    # Emit Observations
-                    for msg in event["tools"]["messages"]:
+                elif node_name == "tools":
+                    for msg in output["messages"]:
                         yield {"type": "observation", "content": msg.content}
-        except Exception as e:
-            logger.error(f"Graph Execution Error: {e}")
-            yield {"type": "error", "content": str(e)}
+
+    def _flatten_content(self, content: Union[str, list]) -> str:
+        """Helper to convert Gemini message content to a clean string."""
+        if isinstance(content, str):
+            return content
+        res = ""
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, str):
+                    res += part
+                elif isinstance(part, dict) and part.get("type") == "text":
+                    res += part.get("text", "")
+        return res
 
 class SubAgent:
     """Compatibility wrapper for recursive reasoning."""
@@ -238,5 +265,5 @@ class SubAgent:
         self.persona = persona
 
     async def solve(self, goal: str) -> str:
-        agent = GenericReActAgent(self.registry, self.execute_func, self.model_id, depth=self.depth, persona=self.persona)
+        agent = GenericReActAgent(self.registry, self.execute_func, self.model_id, depth=self.depth + 1, persona=self.persona)
         return await agent.run_full(goal)
