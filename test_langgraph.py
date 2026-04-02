@@ -10,27 +10,30 @@ if "GEMINI_API_KEY" in os.environ and "GOOGLE_API_KEY" not in os.environ:
 
 class MockRegistry:
     async def get_relevant_tools(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
-        # Return metadata for a fake weather tool
         return [{
-            "name": "get_weather",
-            "description": "Fetches weather data for a location.",
-            "full_doc": "get_weather(location: str): Fetches weather data for a location.",
-            "signature": "(location: str)"
+            "name": "search_web",
+            "description": "Searches the live web using Google Search.",
+            "full_doc": "search_web(query: str, num_results: int = 3): Searches the live web.",
+            "signature": "(query: str, num_results: int = 3)",
+            "properties": {
+                "query": {"type": "string", "description": "query"},
+                "num_results": {"type": "integer", "description": "num_results"}
+            },
+            "required": ["query"]
         }]
 
 async def mock_execute(name: str, args: Dict[str, Any]) -> str:
     print(f"  [Mock Execute] Tool: {name}, Args: {args}")
-    if name == "get_weather":
-        return json.dumps({"location": args.get("location", "unknown"), "temp_c": 22, "condition": "Sunny"})
+    if name == "search_web":
+        return "Apollo 11 mission facts: Launched July 16, 1969. Crew: Neil Armstrong, Buzz Aldrin, Michael Collins. Landed on Moon July 20, 1969. Sea of Tranquility."
     return "Tool not found"
 
 async def test_run():
     registry = MockRegistry()
-    # We use a depth of 0 and the default 'general' persona
     agent = GenericReActAgent(registry, mock_execute)
     
     print("\n--- Starting LangGraph Test Run ---")
-    query = "What is the weather in Paris?"
+    query = "write a blog post in the style of edgar allen poe limiting yourself to 400 words about the moon landing"
     print(f"User Query: {query}")
     
     async for step in agent.run(query):

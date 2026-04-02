@@ -3,14 +3,14 @@ import json
 import sys
 import time
 
-def run_test(query, persona="general"):
+def run_test(query, persona="supervisor"):
     base_url = "http://localhost:8000"
     payload = {
         "message": query,
         "persona": persona
     }
     
-    print(f"\n--- Testing: '{query}' ---")
+    print(f"\n--- Testing Multi-Agent: '{query}' ---")
     try:
         with requests.post(f"{base_url}/chat", json=payload, stream=True) as r:
             r.raise_for_status()
@@ -23,11 +23,16 @@ def run_test(query, persona="general"):
                         
                         if step_type == "action":
                             print(f"   [Action] {data.get('tool')} with {data.get('args')}")
+                        elif step_type == "delegation":
+                            print(f"   [Delegation] {data.get('content')}")
                         elif step_type == "observation":
                             content = data.get("content", "")
                             print(f"   [Observation] {content[:100]}...")
+                        elif step_type == "thought":
+                            content = data.get("content", "")
+                            print(f"   [Thought] {content[:100]}...")
                         elif step_type == "final_answer":
-                            print(f"✅ [Final Answer] {data.get('content')}")
+                            print(f"\n✅ [Final Approved Artifact] {data.get('content')}")
                         elif step_type == "error":
                             print(f"❌ [Agent Error] {data.get('content')}")
                             return False
@@ -48,10 +53,8 @@ def verify_system():
         sys.exit(1)
 
     tests = [
-        "What is the weather?",           # Tests sub-agent location resolution
-        "What is the weather in London?", # Tests argument mapping
-        "Where am I right now?",           # Tests zero-argument tool
-        "Calculate 2**10 and then diff(sin(x), x)", # Tests multiple tools / complex logic
+        "Write a 100 word blog about Artificial Intelligence. Then rewrite it to sound like William Shakespeare.",
+        "Write a Python script that defines a function to compute the 10th Fibonacci number. Then test it to make sure it works."
     ]
     
     all_passed = True

@@ -8,10 +8,11 @@ A state-of-the-art AI agent framework built on **LangGraph** and the **Model Con
 
 The system utilizes a decoupled, modern architecture that separates reasoning, orchestration, and execution.
 
-### 1. The Reasoning Engine (LangGraph)
-The core logic has been evolved from a manual ReAct loop into a formal **LangGraph StateGraph**.
-- **State Machine**: Orchestrates the conversation flow using nodes (`agent`, `tools`) and conditional edges (`should_continue`).
-- **Persistence Readiness**: The graph structure is designed to support checkpointing and long-running stateful sessions.
+### 1. The Reasoning Engine (LangGraph Multi-Agent)
+The core logic has been evolved from a manual ReAct loop into a formal **LangGraph StateGraph** featuring a **Supervisor + Specialists** architecture.
+- **Supervisor Routing**: A Chief QA Supervisor evaluates the shared `artifact` against the user's request and intelligently delegates to specific experts.
+- **Shared Blackboard State**: Agents communicate and collaborate by reading and writing to a universal `artifact` in the graph state, along with `eval_feedback` and an `is_approved` gatekeeper flag.
+- **Specialist Personas**: Includes dedicated personas like `blog_writer`, `style_editor`, `senior_coder`, `qa_tester`, `news_analyst`, and `travel_companion`.
 - **Native Tool Binding**: Leverages Gemini's function-calling capabilities through LangChain's `bind_tools` for maximum precision.
 
 ### 2. The MCP Host (`backend/main.py`)

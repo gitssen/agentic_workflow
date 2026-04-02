@@ -12,11 +12,12 @@ pkill -f "next-dev"
 
 echo "🚀 Starting Agentic Workflow..."
 
-# Start Backend (FastAPI + MCP Host)
+# Start Backend (FastAPI + MCP Host) with Auto-Reload
 # The backend will automatically start the MCP Server subprocess
-echo "Starting Backend (FastAPI)..."
+echo "Starting Backend (FastAPI) with --reload..."
 export PYTHONPATH=$(pwd)
-./.venv/bin/python3 backend/main.py &
+# We use uvicorn with --reload for hot-reloading on Python file changes
+./.venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload &
 BACKEND_PID=$!
 
 sleep 2
