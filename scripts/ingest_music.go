@@ -1,0 +1,282 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"cloud.google.com/go/firestore"
+	"github.com/dhowden/tag"
+	"github.com/google/generative-ai-go/genai"
+	"github.com/joho/godotenv"
+	"google.golang.org/api/option"
+)
+
+// --- 1. Data Structures ---
+
+type AudioFeatures struct {
+	TempoBPM         float64 `firestore:"tempo_bpm"`
+	SpectralCentroid float64 `firestore:"spectral_centroid"`
+	EnergyRMSE       float64 `firestore:"energy_rmse"`
+}
+
+type Song struct {
+	ID                   string         `firestore:"id"`
+	Filepath             string         `firestore:"filepath"`
+	Title                string         `firestore:"title"`
+	Artist               string         `firestore:"artist"`
+	Album                string         `firestore:"album"`
+	Genre                string         `firestore:"genre"`
+	AudioFeatures        AudioFeatures  `firestore:"audio_features"`
+	DescriptionForSearch string         `firestore:"description_for_search"`
+	Embedding            interface{}    `firestore:"embedding"`
+}
+
+type Job struct {
+	Path string
+}
+
+// --- 2. Worker Logic ---
+
+func worker(ctx context.Context, id int, jobs <-chan Job, results chan<- Song, wg *sync.WaitGroup, aiClient *genai.Client, processedCount *uint64, totalCount int64) {
+	defer wg.Done()
+	
+	emModelName := os.Getenv("EMBEDDING_MODEL_ID")
+	if emModelName == "" {
+		emModelName = "models/gemini-embedding-001"
+	} else if !strings.HasPrefix(emModelName, "models/") {
+		emModelName = "models/" + emModelName
+	}
+	
+	genModelName := os.Getenv("MODEL_ID")
+	if genModelName == "" {
+		genModelName = "models/gemini-2.5-flash"
+	} else if !strings.HasPrefix(genModelName, "models/") {
+		genModelName = "models/" + genModelName
+	}
+
+	emModel := aiClient.EmbeddingModel(emModelName)
+	genModel := aiClient.GenerativeModel(genModelName)
+
+	for job := range jobs {
+		// Increment counter atomically
+		count := atomic.AddUint64(processedCount, 1)
+		
+		if count % 10 == 0 || count == uint64(totalCount) {
+			log.Printf("[%d / %d] Processing: %s\n", count, totalCount, filepath.Base(job.Path))
+		}
+
+		// A. Metadata Extraction
+		f, err := os.Open(job.Path)
+		var title, artist, album, genre string
+		if err == nil {
+			m, tagErr := tag.ReadFrom(f)
+			if tagErr == nil {
+				title = m.Title()
+				artist = m.Artist()
+				album = m.Album()
+				genre = m.Genre()
+			}
+			f.Close()
+		}
+
+		// Fallback to filename if title is missing
+		if title == "" {
+			title = strings.TrimSuffix(filepath.Base(job.Path), filepath.Ext(job.Path))
+		}
+
+		// B. Simple Audio Analysis (Placeholder)
+		features := AudioFeatures{
+			TempoBPM: 120.0, 
+			EnergyRMSE: 0.5,
+		}
+
+		// C. Gemini-Powered Metadata & Description Inference
+		// We ask for structured JSON to fill missing gaps
+		prompt := fmt.Sprintf("Analyze this music filepath: %s. Return a JSON object with keys: 'artist', 'album', 'genre', 'mood_description' (one sentence vibe). If you can't determine a field, leave it empty. Respond ONLY with the JSON block.", job.Path)
+		
+		// Simple rate limiting
+		time.Sleep(1 * time.Second)
+		
+		resp, err := genModel.GenerateContent(ctx, genai.Text(prompt))
+		
+		var aiMeta struct {
+			Artist          string `json:"artist"`
+			Album           string `json:"album"`
+			Genre           string `json:"genre"`
+			MoodDescription string `json:"mood_description"`
+		}
+
+		if err == nil && len(resp.Candidates) > 0 {
+			part := resp.Candidates[0].Content.Parts[0]
+			if text, ok := part.(genai.Text); ok {
+				cleanJSON := strings.TrimSpace(string(text))
+				cleanJSON = strings.TrimPrefix(cleanJSON, "```json")
+				cleanJSON = strings.TrimSuffix(cleanJSON, "```")
+				cleanJSON = strings.TrimSpace(cleanJSON)
+				_ = json.Unmarshal([]byte(cleanJSON), &aiMeta)
+			}
+		}
+
+		// Fill in gaps if tags were missing
+		if artist == "" { artist = aiMeta.Artist }
+		if album == "" { album = aiMeta.Album }
+		if genre == "" { genre = aiMeta.Genre }
+
+		description := fmt.Sprintf("Title: %s. Artist: %s. Album: %s. Genre: %s. AI Inference: %s. Tempo: %.1f BPM.",
+			title, artist, album, genre, aiMeta.MoodDescription, features.TempoBPM)
+
+		// D. Generate Embedding
+		res, err := emModel.EmbedContent(ctx, genai.Text(description))
+		if err != nil {
+			log.Printf("Embedding error for %s: %v", filepath.Base(job.Path), err)
+			continue
+		}
+
+		// Convert []float32 to []float64 for firestore Vector search
+		emb64 := make([]float64, len(res.Embedding.Values))
+		for i, v := range res.Embedding.Values {
+			emb64[i] = float64(v)
+		}
+
+		// E. Construct Song Object
+		song := Song{
+			ID:                   strings.ReplaceAll(filepath.Base(job.Path), ".", "_"),
+			Filepath:             job.Path,
+			Title:                title,
+			Artist:               artist,
+			Album:                album,
+			Genre:                genre,
+			AudioFeatures:        features,
+			DescriptionForSearch: description,
+			Embedding:            emb64,
+		}
+
+		results <- song
+	}
+}
+
+// --- 3. Main Orchestrator ---
+
+func main() {
+	// Load .env file
+	_ = godotenv.Load()
+
+	ctx := context.Background()
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	projectID := os.Getenv("GOOGLE_PROJECT_ID")
+	if projectID == "" {
+		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
+	}
+	databaseID := os.Getenv("FIRESTORE_DATABASE_ID")
+	if databaseID == "" {
+		databaseID = "default"
+	}
+
+	if apiKey == "" || projectID == "" {
+		log.Fatal("GEMINI_API_KEY or GOOGLE_CLOUD_PROJECT environment variable not set.")
+	}
+
+	if len(os.Args) < 2 {
+		log.Fatal("Usage: go run scripts/ingest_music.go <path_to_music_directory>")
+	}
+	musicDir := os.Args[1]
+
+	// Step 1: Preliminary Scan to get Total Count
+	log.Println("🔍 Scanning directory for music files...")
+	var totalFiles int64 = 0
+	_ = filepath.Walk(musicDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil { return nil }
+		if !info.IsDir() && (strings.HasSuffix(path, ".mp3") || strings.HasSuffix(path, ".flac")) {
+			totalFiles++
+		}
+		return nil
+	})
+	log.Printf("🎵 Found %d songs to process.\n", totalFiles)
+
+	if totalFiles == 0 {
+		log.Println("No supported music files found. Exiting.")
+		return
+	}
+
+	// Clients
+	fsClient, err := firestore.NewClientWithDatabase(ctx, projectID, databaseID)
+	if err != nil {
+		log.Fatalf("Firestore client: %v", err)
+	}
+	defer fsClient.Close()
+
+	aiClient, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+	if err != nil {
+		log.Fatalf("Gemini client: %v", err)
+	}
+	defer aiClient.Close()
+
+	// Channels & Sync
+	jobs := make(chan Job, 100)
+	results := make(chan Song, 100)
+	var wg sync.WaitGroup
+	var processedCount uint64 = 0
+	startTime := time.Now()
+
+	// Start Workers
+	numWorkers := 8
+	for w := 1; w <= numWorkers; w++ {
+		wg.Add(1)
+		go worker(ctx, w, jobs, results, &wg, aiClient, &processedCount, totalFiles)
+	}
+
+	// Start Batch Ingester
+	doneChan := make(chan bool)
+	go func() {
+		batch := fsClient.Batch()
+		count := 0
+		committedTotal := 0
+		for song := range results {
+			docRef := fsClient.Collection("songs").Doc(song.ID)
+			batch.Set(docRef, song)
+			count++
+
+			if count >= 10 {
+				_, err := batch.Commit(ctx)
+				if err != nil {
+					log.Fatalf("FATAL: Batch commit failure: %v. Failing early to prevent data inconsistency.", err)
+				}
+				committedTotal += count
+				batch = fsClient.Batch()
+				count = 0
+				log.Printf("✅ DB SYNC: Committed %d songs so far...\n", committedTotal)
+			}
+		}
+		if count > 0 {
+			_, _ = batch.Commit(ctx)
+			committedTotal += count
+		}
+		log.Printf("🏁 DB SYNC COMPLETE: Total %d songs stored in Firestore.\n", committedTotal)
+		doneChan <- true
+	}()
+
+	// Producer: Walk and Pipe
+	_ = filepath.Walk(musicDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil { return nil }
+		if !info.IsDir() && (strings.HasSuffix(path, ".mp3") || strings.HasSuffix(path, ".flac")) {
+			jobs <- Job{Path: path}
+		}
+		return nil
+	})
+
+	close(jobs)
+	wg.Wait()
+	close(results)
+	<-doneChan
+
+	duration := time.Since(startTime)
+	log.Printf("🚀 Ingestion finished in %v. Average speed: %.2f songs/sec\n", duration, float64(totalFiles)/duration.Seconds())
+}

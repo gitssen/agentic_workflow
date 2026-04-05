@@ -14,3 +14,6 @@ langgraph
 langchain
 langchain-google-genai
 langchain-core
+librosa
+mutagen
+soundfile

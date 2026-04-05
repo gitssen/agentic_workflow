@@ -52,13 +52,14 @@ class AgentState(TypedDict):
     artifact: Optional[str]                                 # The Blackboard: Current work product
     eval_feedback: Optional[str]                            # Instructions from the Supervisor
     is_approved: bool                                       # Termination condition
+    loop_count: int                                         # Prevention of infinite routing loops
 
 # --- Supervisor Output Schema ---
 class SupervisorDecision(BaseModel):
     """Schema for the Supervisor's routing decision."""
     is_approved: bool = Field(description="True if the artifact perfectly fulfills the user request. False otherwise.")
     eval_feedback: str = Field(description="Detailed feedback on what is missing or needs fixing. Empty if approved.")
-    next_specialist: str = Field(description="The exact name of the specialist to route to if not approved.")
+    next_specialist: str = Field(description="The exact name of the specialist to route to if not approved (e.g., 'music_curator', 'blog_writer').")
 
 # --- 2. Tool Wrapper ---
 def create_tool_wrapper(name: str, description: str, execute_func: Any, metadata: Dict[str, Any]):
@@ -116,11 +117,22 @@ class GenericReActAgent:
             Evaluates the current Artifact against the user request.
             Acts as the router and quality controller.
             """
+            loop_count = state.get("loop_count", 0) + 1
+            
             # Extraction of core user intent
             user_request = next((m.content for m in state["messages"] if isinstance(m, HumanMessage)), "")
             artifact = state.get("artifact", "")
             
-            logger.info(f"--- Supervisor Node Starting ---")
+            logger.info(f"--- Supervisor Node Starting (Loop: {loop_count}) ---")
+            
+            if loop_count > 3:
+                logger.warning("Maximum routing loops reached. Forcing termination.")
+                return {
+                    "is_approved": True,
+                    "eval_feedback": "Stopped: No progress made after multiple attempts.",
+                    "loop_count": loop_count
+                }
+
             logger.info(f"Current Artifact length: {len(artifact) if artifact else 0}")
             if state.get("eval_feedback"):
                 logger.info(f"Previous Feedback: {state['eval_feedback'][:100]}...")
@@ -157,7 +169,8 @@ class GenericReActAgent:
             return {
                 "is_approved": decision.is_approved,
                 "eval_feedback": decision.eval_feedback,
-                "active_specialist": decision.next_specialist
+                "active_specialist": decision.next_specialist,
+                "loop_count": loop_count
             }
 
         # --- Node: Specialist Agent ---
@@ -296,7 +309,8 @@ class GenericReActAgent:
             "active_specialist": None,
             "artifact": None,
             "eval_feedback": None,
-            "is_approved": False
+            "is_approved": False,
+            "loop_count": 0
         }
 
         indent = "  " * self.depth
