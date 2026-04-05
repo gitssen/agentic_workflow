@@ -189,17 +189,22 @@ func main() {
 	}
 	musicDir := os.Args[1]
 
+	isMusicFile := func(path string) bool {
+		ext := strings.ToLower(filepath.Ext(path))
+		return ext == ".mp3" || ext == ".flac" || ext == ".m4a" || ext == ".mp4" || ext == ".wav"
+	}
+
 	// Step 1: Preliminary Scan to get Total Count
 	log.Println("🔍 Scanning directory for music files...")
 	var totalFiles int64 = 0
 	_ = filepath.Walk(musicDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil { return nil }
-		if !info.IsDir() && (strings.HasSuffix(path, ".mp3") || strings.HasSuffix(path, ".flac")) {
+		if !info.IsDir() && isMusicFile(path) {
 			totalFiles++
 		}
 		return nil
 	})
-	log.Printf("🎵 Found %d songs to process.\n", totalFiles)
+	log.Printf("🎵 Found %d potential songs. Checking for existing records...\n", totalFiles)
 
 	if totalFiles == 0 {
 		log.Println("No supported music files found. Exiting.")
@@ -264,13 +269,34 @@ func main() {
 	}()
 
 	// Producer: Walk and Pipe
+	var toProcess int64 = 0
+	var skipped int64 = 0
+	
 	_ = filepath.Walk(musicDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil { return nil }
-		if !info.IsDir() && (strings.HasSuffix(path, ".mp3") || strings.HasSuffix(path, ".flac")) {
+		if !info.IsDir() && isMusicFile(path) {
+			id := strings.ReplaceAll(filepath.Base(path), ".", "_")
+			
+			// Quick existence check
+			doc, err := fsClient.Collection("songs").Doc(id).Get(ctx)
+			if err == nil && doc.Exists() {
+				skipped++
+				if skipped % 50 == 0 {
+					log.Printf("... Skipped %d existing songs", skipped)
+				}
+				return nil
+			}
+			
+			toProcess++
 			jobs <- Job{Path: path}
 		}
 		return nil
 	})
+
+	log.Printf("⏭️  Skipped %d already indexed files. Processing %d new files.\n", skipped, toProcess)
+	
+	// Update totalFiles for the final speed calculation
+	totalFiles = toProcess
 
 	close(jobs)
 	wg.Wait()

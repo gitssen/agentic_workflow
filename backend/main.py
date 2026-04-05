@@ -177,6 +177,13 @@ def init_local_db():
 
 init_local_db()
 
+def clean_music_string(s: str) -> str:
+    """Removes common parenthetical suffixes like (Live) or (scratchy) for better search."""
+    if not s: return ""
+    s = re.sub(r"\(.*?\)", "", s)
+    s = re.sub(r"\[.*?\]", "", s)
+    return s.strip()
+
 def get_cached_art(artist: str, album: str, title: str) -> Optional[str]:
     key = f"{artist}|{album}|{title}".lower()
     conn = sqlite3.connect(DB_PATH)
@@ -317,9 +324,11 @@ async def curate_playlist(request: PlaylistRequest):
             raise
 
     registry = BackendRegistry()
-    agent = GenericReActAgent(registry, execute_via_mcp, persona="music_curator")
+    agent = GenericReActAgent(registry, execute_via_mcp, persona="music_curator", strict_persona=True)
     
-    final_output = await agent.run_full(request.prompt)
+    # Append strict instruction to the prompt to guarantee JSON output
+    strict_prompt = request.prompt + "\n\nCRITICAL: You MUST use the query_song_database tool to find songs based on this context. Your final output MUST be wrapped in <artifact> tags and formatted strictly as a JSON array of song objects, exactly as instructed in your persona."
+    final_output = await agent.run_full(strict_prompt)
     logger.info(f"Agent raw output for curation: {final_output[:500]}...")
     
     playlist_json = None
@@ -402,6 +411,8 @@ async def stream_audio(song_id: str):
         media_type = "audio/flac"
     elif filepath.lower().endswith(".wav"):
         media_type = "audio/wav"
+    elif filepath.lower().endswith(".m4a") or filepath.lower().endswith(".mp4"):
+        media_type = "audio/mp4"
         
     logger.info(f"Streaming {filepath} as {media_type}")
     return FileResponse(

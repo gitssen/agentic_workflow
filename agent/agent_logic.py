@@ -98,11 +98,12 @@ def create_tool_wrapper(name: str, description: str, execute_func: Any, metadata
 
 # --- 3. Master Multi-Agent System ---
 class GenericReActAgent:
-    def __init__(self, registry: Any, execute_func: Any, model_id: str = MODEL_ID, depth: int = 0, persona: str = "general"):
+    def __init__(self, registry: Any, execute_func: Any, model_id: str = MODEL_ID, depth: int = 0, persona: str = "general", strict_persona: bool = False):
         self.registry = registry
         self.execute_func = execute_func
         self.depth = depth
         self.persona_name = persona
+        self.strict_persona = strict_persona
         
         langchain_model = model_id if model_id.startswith("models/") else f"models/{model_id}"
         self.llm = ChatGoogleGenerativeAI(model=langchain_model, temperature=0)
@@ -164,12 +165,13 @@ class GenericReActAgent:
             eval_llm = self.llm.with_structured_output(SupervisorDecision).with_config({"tags": ["supervisor"]})
             decision = await eval_llm.ainvoke(context_messages)
             
-            logger.info(f"Supervisor Decision: approved={decision.is_approved}, next={decision.next_specialist}")
+            next_specialist = self.persona_name if self.strict_persona else decision.next_specialist
+            logger.info(f"Supervisor Decision: approved={decision.is_approved}, next={next_specialist}")
             
             return {
                 "is_approved": decision.is_approved,
                 "eval_feedback": decision.eval_feedback,
-                "active_specialist": decision.next_specialist,
+                "active_specialist": next_specialist,
                 "loop_count": loop_count
             }
 

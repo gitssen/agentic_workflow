@@ -194,8 +194,10 @@ async def main():
             logger.debug("Stdio streams established. Running server...")
             await server.run(read, write, server.create_initialization_options())
     except Exception as e:
-        logger.critical(f"FATAL: MCP Server crashed during startup: {e}", exc_info=True)
-        # We don't want to just exit silently, as that causes Errno 5 in Host
+        logger.critical(f"FATAL: MCP Server crashed during startup/run: {e}", exc_info=True)
+        with open("mcp_crash.log", "a") as f:
+            import traceback
+            f.write(f"Crash: {e}\n{traceback.format_exc()}\n")
         raise
 
 if __name__ == "__main__":
