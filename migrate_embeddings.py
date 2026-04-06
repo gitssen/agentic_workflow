@@ -1,37 +1,53 @@
+import os
+import sys
+from dotenv import load_dotenv
+
+# Ensure the project root is in sys.path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from agent.config import FIRESTORE_DATABASE_ID, setup_logger
 import firebase_admin
 from firebase_admin import firestore
-from google.cloud.firestore_v1.vector import Vector
-from agent.config import FIRESTORE_DATABASE_ID
+
+load_dotenv()
+logger = setup_logger("Migration")
 
 if not firebase_admin._apps:
     firebase_admin.initialize_app()
+
 db = firestore.client(database_id=FIRESTORE_DATABASE_ID)
 
 def migrate():
-    print(f"Starting migration for collection 'songs' in database '{FIRESTORE_DATABASE_ID}'...")
+    print(f"--- Starting Migration on Database: {FIRESTORE_DATABASE_ID} ---")
     collection = db.collection("songs")
-    docs = collection.get()
+    docs = collection.stream()
     
     count = 0
-    for doc in docs:
-        data = doc.to_dict()
-        emb = data.get("embedding")
-        
-        if isinstance(emb, list):
-            # Truncate to 768 or pad if needed (should be 3072 based on inspection)
-            new_emb = emb[:768]
-            if len(new_emb) < 768:
-                new_emb.extend([0.0] * (768 - len(new_emb)))
-            
-            # Update with proper Vector type
-            doc.reference.update({
-                "embedding": Vector(new_emb)
-            })
-            count += 1
-            if count % 10 == 0:
-                print(f"Migrated {count} songs...")
+    batch = db.batch()
     
-    print(f"Migration complete. Total songs updated: {count}")
+    for doc in docs:
+        d = doc.to_dict()
+        updates = {}
+        
+        if 'title' in d and 'title_lowercase' not in d:
+            updates['title_lowercase'] = d['title'].lower()
+        if 'artist' in d and 'artist_lowercase' not in d:
+            updates['artist_lowercase'] = d['artist'].lower()
+            
+        if updates:
+            batch.update(doc.reference, updates)
+            count += 1
+            
+            # Commit in batches of 500
+            if count % 500 == 0:
+                batch.commit()
+                print(f"Migrated {count} documents...")
+                batch = db.batch()
+                
+    if count % 500 != 0:
+        batch.commit()
+        
+    print(f"✨ Finished! Total migrated: {count}")
 
 if __name__ == "__main__":
     migrate()

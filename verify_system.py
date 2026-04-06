@@ -4,7 +4,7 @@ import sys
 import time
 
 def run_test(query, persona="supervisor"):
-    base_url = "http://localhost:8000"
+    base_url = "http://192.168.1.100:8000"
     payload = {
         "message": query,
         "persona": persona
@@ -42,7 +42,7 @@ def run_test(query, persona="supervisor"):
     return True
 
 def verify_system():
-    base_url = "http://localhost:8000"
+    base_url = "http://192.168.1.100:8000"
     
     print(f"--- Checking Connectivity ---")
     try:

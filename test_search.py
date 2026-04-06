@@ -8,13 +8,11 @@ from google import genai
 
 load_dotenv()
 
-# Setup GenAI for embedding
-api_key = os.environ.get("GEMINI_API_KEY")
-client = genai.Client(api_key=api_key)
+from agent.config import get_genai_client, EMBEDDING_MODEL_ID, EMBEDDING_DIM, FIRESTORE_DATABASE_ID
+client = get_genai_client()
 
 # Setup Firestore
-project_id = os.environ.get("GOOGLE_PROJECT_ID")
-database_id = os.environ.get("FIRESTORE_DATABASE_ID", "default")
+database_id = FIRESTORE_DATABASE_ID
 
 if not firebase_admin._apps:
     firebase_admin.initialize_app()
@@ -24,11 +22,10 @@ def test_search(query_text):
     print(f"Testing search for: '{query_text}'")
     
     # 1. Generate embedding
-    model_id = "models/gemini-embedding-001"
     res = client.models.embed_content(
-        model=model_id,
+        model=EMBEDDING_MODEL_ID,
         contents=query_text,
-        config={"output_dimensionality": 768}
+        config={"output_dimensionality": EMBEDDING_DIM}
     )
     query_vector = res.embeddings[0].values
     print(f"Query vector generated (len: {len(query_vector)})")

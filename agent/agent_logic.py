@@ -147,6 +147,15 @@ class GenericReActAgent:
             
             prompt = f"{persona}\n\nUSER REQUEST: {user_request}\n\nCURRENT ARTIFACT:\n{artifact if artifact else '[None yet]'}"
             
+            # Extract Tool Outputs for the Supervisor to verify truthfulness
+            tool_outputs = []
+            for m in state["messages"]:
+                if isinstance(m, ToolMessage):
+                    tool_outputs.append(f"Tool Result ({m.tool_call_id}):\n{m.content}")
+            
+            if tool_outputs:
+                prompt += "\n\nTOOL OUTPUTS (Use these to verify the Artifact's accuracy):\n" + "\n---\n".join(tool_outputs)
+
             if not artifact and last_content:
                 prompt += f"\n\nLAST AGENT RESPONSE (Note: No artifact was extracted from this):\n{last_content}"
 

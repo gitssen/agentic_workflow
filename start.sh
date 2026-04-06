@@ -25,12 +25,12 @@ sleep 2
 
 # Start Frontend (Next.js)
 echo "Starting Frontend (Next.js)..."
-cd frontend && npm run dev &
+cd frontend && npm run dev -- -H 0.0.0.0 &
 FRONTEND_PID=$!
 
 echo "--------------------------------------------------------"
-echo "Backend: http://localhost:8000"
-echo "Frontend: http://localhost:3000"
+echo "Backend: http://192.168.1.100:8000"
+echo "Frontend: http://192.168.1.100:3000"
 echo "--------------------------------------------------------"
 echo "Press Ctrl+C to stop all services."
 

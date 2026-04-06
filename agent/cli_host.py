@@ -51,10 +51,10 @@ class HostRegistry:
         self.collection = db.collection(collection_name)
 
     async def get_relevant_tools(self, query: str, limit: int = 3) -> list[dict[str, Any]]:
-        from agent.config import get_genai_client
+        from agent.config import get_genai_client, EMBEDDING_MODEL_ID, EMBEDDING_DIM
         client = get_genai_client()
         embedding_response = client.models.embed_content(
-            model=EMBEDDING_MODEL_ID, contents=query, config={"output_dimensionality": 768}
+            model=EMBEDDING_MODEL_ID, contents=query, config={"output_dimensionality": EMBEDDING_DIM}
         )
         query_vector = embedding_response.embeddings[0].values
         results = self.collection.find_nearest(

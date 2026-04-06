@@ -17,3 +17,4 @@ langchain-core
 librosa
 mutagen
 soundfile
+soco

@@ -25,7 +25,7 @@ export default function Chat() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch("http://localhost:8000/personas")
+    fetch("http://192.168.1.100:8000/personas")
       .then((res) => res.json())
       .then((data) => setPersonas(data))
       .catch((err) => console.error("Failed to fetch personas", err));
@@ -59,7 +59,7 @@ export default function Chat() {
     };
 
     try {
-      const response = await fetch("http://localhost:8000/chat", {
+      const response = await fetch("http://192.168.1.100:8000/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: input, persona: selectedPersona }),
@@ -121,7 +121,7 @@ export default function Chat() {
         {
           id: (Date.now() + 1).toString(),
           role: "assistant",
-          content: "### Connection Error\nPlease ensure the backend is active at `http://localhost:8000`.",
+          content: "### Connection Error\nPlease ensure the backend is active at `http://192.168.1.100:8000`.",
         },
       ]);
     } finally {

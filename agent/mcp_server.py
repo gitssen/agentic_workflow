@@ -21,7 +21,7 @@ import sys
 # Ensure the project root is in sys.path
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from agent.config import setup_logger, MODEL_ID, EMBEDDING_MODEL_ID, FIRESTORE_DATABASE_ID
+from agent.config import setup_logger, MODEL_ID, EMBEDDING_MODEL_ID, EMBEDDING_DIM, FIRESTORE_DATABASE_ID
 from agent.agent_logic import SubAgent
 
 logger = setup_logger("MCPServer")
@@ -78,7 +78,7 @@ class ToolManager:
         from agent.config import get_genai_client
         client = get_genai_client()
         embedding_response = client.models.embed_content(
-            model=EMBEDDING_MODEL_ID, contents=query, config={"output_dimensionality": 768}
+            model=EMBEDDING_MODEL_ID, contents=query, config={"output_dimensionality": EMBEDDING_DIM}
         )
         query_vector = embedding_response.embeddings[0].values
         

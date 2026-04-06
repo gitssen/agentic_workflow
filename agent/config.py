@@ -55,6 +55,7 @@ def get_genai_client() -> genai.Client:
         _GENAI_CLIENT = genai.Client(api_key=api_key)
     return _GENAI_CLIENT
 
-MODEL_ID = "gemini-2.5-flash"
-EMBEDDING_MODEL_ID = "models/gemini-embedding-001"
+MODEL_ID = os.environ.get("MODEL_ID", "gemini-2.5-flash")
+EMBEDDING_MODEL_ID = os.environ.get("EMBEDDING_MODEL_ID", "models/gemini-embedding-001")
+EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "768"))
 FIRESTORE_DATABASE_ID = os.environ.get("FIRESTORE_DATABASE_ID", "default")

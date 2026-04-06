@@ -73,7 +73,7 @@ def register_tool(func, collection_name="tools"):
         model=EMBEDDING_MODEL_ID,
         contents=full_description,
         config={
-            "output_dimensionality": 768
+            "output_dimensionality": EMBEDDING_DIM
         }
     )
     embedding = embedding_response.embeddings[0].values

@@ -1,6 +1,10 @@
 import os
 import sys
 import asyncio
+import socket
+import html
+import urllib.parse
+import soco
 from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
@@ -34,23 +38,30 @@ class MCPManager:
     def __init__(self):
         self.session: Optional[ClientSession] = None
         self._exit_stack = None
+        self._client_gen = None
 
     async def connect(self):
-        mcp_path = os.path.join(os.path.dirname(__file__), "..", "agent", "mcp_server.py")
-        logger.info(f"Starting MCP Server from: {mcp_path}")
-        server_params = StdioServerParameters(
-            command="./.venv/bin/python3",
-            args=[mcp_path],
-            env={**os.environ}
-        )
-        # Note: stdio_client is an async context manager. 
-        # For a persistent backend, we use it to start the server.
-        self._client_gen = stdio_client(server_params)
-        read, write = await self._client_gen.__aenter__()
-        self.session = ClientSession(read, write)
-        await self.session.__aenter__()
-        await self.session.initialize()
-        logger.info("Connected to MCP Server")
+        try:
+            mcp_path = os.path.join(os.path.dirname(__file__), "..", "agent", "mcp_server.py")
+            logger.info(f"Starting MCP Server from: {mcp_path}")
+            server_params = StdioServerParameters(
+                command="./.venv/bin/python3",
+                args=[mcp_path],
+                env={**os.environ}
+            )
+            
+            async def _do_connect():
+                self._client_gen = stdio_client(server_params)
+                read, write = await self._client_gen.__aenter__()
+                self.session = ClientSession(read, write)
+                await self.session.__aenter__()
+                await self.session.initialize()
+                
+            await asyncio.wait_for(_do_connect(), timeout=15.0)
+            logger.info("Connected to MCP Server")
+        except Exception as e:
+            logger.error(f"Failed to connect to MCP Server: {e}")
+            self.session = None
 
     async def disconnect(self):
         if self.session:
@@ -85,10 +96,10 @@ class BackendRegistry:
         self.collection = db.collection(collection_name)
 
     async def get_relevant_tools(self, query: str, limit: int = 3) -> list[dict[str, Any]]:
-        from agent.config import get_genai_client, EMBEDDING_MODEL_ID
+        from agent.config import get_genai_client, EMBEDDING_MODEL_ID, EMBEDDING_DIM
         client = get_genai_client()
         embedding_response = client.models.embed_content(
-            model=EMBEDDING_MODEL_ID, contents=query, config={"output_dimensionality": 768}
+            model=EMBEDDING_MODEL_ID, contents=query, config={"output_dimensionality": EMBEDDING_DIM}
         )
         query_vector = embedding_response.embeddings[0].values
         results = self.collection.find_nearest(
@@ -109,6 +120,176 @@ class PlaylistSaveRequest(BaseModel):
     name: str
     prompt: str
     songs: List[Dict[str, Any]]
+
+class SonosPlayRequest(BaseModel):
+    ip: str
+    song_id: str
+
+class SonosControlRequest(BaseModel):
+    ip: str
+    action: str # "pause", "resume", "stop", "volume"
+    value: Optional[int] = None
+
+def get_local_ip():
+    """Helper to get the local network IP of the server for Sonos to reach."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # use a public IP to find the primary interface IP
+        s.connect(('8.8.8.8', 80))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '192.168.1.100'
+    finally:
+        s.close()
+    return IP
+
+@app.get("/sonos/devices")
+async def list_sonos_devices():
+    """Discovers Sonos devices on the local network."""
+    try:
+        # Use discovery from multiple methods if possible, or just standard soco.discover
+        devices = soco.discover(timeout=5)
+        if not devices:
+            # Fallback attempt
+            await asyncio.sleep(1)
+            devices = soco.discover(timeout=5)
+            
+        if not devices:
+            return []
+        return [{"name": d.player_name, "ip": d.ip_address} for d in devices]
+    except Exception as e:
+        logger.error(f"Sonos discovery failed: {e}")
+        return []
+
+@app.post("/sonos/play")
+async def play_on_sonos(request: SonosPlayRequest):
+    """Commands a Sonos speaker to play a specific song ID with proper metadata."""
+    try:
+        device = soco.SoCo(request.ip)
+        if device.group and device.group.coordinator:
+            device = device.group.coordinator
+            
+        doc = await asyncio.to_thread(db.collection("songs").document(request.song_id).get)
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Song not found")
+        
+        song_data = doc.to_dict()
+        title = html.escape(song_data.get("title", "Unknown"))
+        artist = html.escape(song_data.get("artist", "Unknown"))
+        
+        # Determine media type from extension
+        filepath = song_data.get("filepath", "")
+        mime = "audio/mpeg"
+        if filepath.lower().endswith(".flac"): mime = "audio/flac"
+        elif filepath.lower().endswith(".wav"): mime = "audio/wav"
+        elif filepath.lower().endswith(".m4a") or filepath.lower().endswith(".mp4"): mime = "audio/mp4"
+
+        local_ip = get_local_ip()
+        # Ensure song_id is properly quoted for the URL
+        safe_song_id = urllib.parse.quote(request.song_id)
+        stream_url = f"http://{local_ip}:8000/stream/{safe_song_id}"
+        
+        # Metadata that works well as a 'radio station' / stream
+        metadata = (
+            '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" '
+            'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
+            'xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+            '<item id="-1" parentID="-1" restricted="1">'
+            f'<dc:title>{title}</dc:title>'
+            f'<upnp:artist>{artist}</upnp:artist>'
+            f'<upnp:class>object.item.audioItem.musicTrack</upnp:class>'
+            f'<res protocolInfo="http-get:*:{mime}:*">{stream_url}</res>'
+            '</item></DIDL-Lite>'
+        )
+
+        logger.info(f"Casting to Sonos ({device.player_name} @ {device.ip_address}): {stream_url}")
+        
+        # Clear state
+        try:
+            device.stop()
+            await asyncio.sleep(0.5)
+        except:
+            pass
+
+        # Use play_uri with force_radio=True as it's often more resilient for local server streams
+        try:
+            device.play_uri(stream_url, meta=metadata, force_radio=True)
+            # Some devices set URI but stay PAUSED
+            await asyncio.sleep(1)
+            device.play()
+        except Exception as e:
+            logger.warning(f"play_uri (radio) failed, trying standard: {e}")
+            device.play_uri(stream_url, meta=metadata, force_radio=False)
+            await asyncio.sleep(1)
+            device.play()
+
+        return {"status": "success", "device": device.player_name}
+    except Exception as e:
+        logger.error(f"Sonos playback failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sonos/status/{ip}")
+async def get_sonos_status(ip: str):
+    """Gets current playback status from a Sonos device."""
+    try:
+        device = soco.SoCo(ip)
+        if device.group and device.group.coordinator:
+            device = device.group.coordinator
+            
+        transport_info = device.get_current_transport_info()
+        track_info = device.get_current_track_info()
+        
+        # Helper to convert HH:MM:SS to seconds
+        def to_seconds(time_str):
+            if not time_str or ":" not in time_str: return 0
+            parts = time_str.split(':')
+            if len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+            return 0
+
+        return {
+            "state": transport_info.get("current_transport_state"),
+            "position": to_seconds(track_info.get("position")),
+            "duration": to_seconds(track_info.get("duration")),
+            "volume": device.volume
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post("/sonos/control")
+async def control_sonos(request: SonosControlRequest):
+    """Controls playback (pause, resume, stop, volume) on a Sonos device."""
+    try:
+        device = soco.SoCo(request.ip)
+        if device.group and device.group.coordinator:
+            device = device.group.coordinator
+
+        if request.action == "pause":
+            device.pause()
+        elif request.action == "resume":
+            device.play()
+        elif request.action == "stop":
+            device.stop()
+        elif request.action == "volume":
+            if request.value is not None:
+                device.volume = request.value
+        elif request.action == "seek":
+            if request.value is not None:
+                # Convert seconds to HH:MM:SS
+                m, s = divmod(int(request.value), 60)
+                h, m = divmod(m, 60)
+                seek_str = f"{h:02d}:{m:02d}:{s:02d}"
+                try:
+                    device.seek(seek_str)
+                except Exception as seek_e:
+                    logger.warning(f"Seek failed (likely radio mode): {seek_e}")
+        else:
+            raise HTTPException(status_code=400, detail="Invalid action")
+            
+        return {"status": "success", "device": device.player_name, "action": request.action}
+    except Exception as e:
+        logger.error(f"Sonos control failed ({request.action}): {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/playlists")
 async def save_playlist(request: PlaylistSaveRequest):
@@ -137,6 +318,60 @@ async def list_playlists():
     except Exception as e:
         logger.error(f"Failed to list playlists: {e}")
         return []
+
+@app.get("/songs")
+async def list_songs(search: str = None, limit: int = 100, last_id: str = None):
+    """Returns a list of all indexed songs with optional search filtering and cursor pagination."""
+    try:
+        collection = db.collection("songs")
+        
+        if search:
+            search_clean = search.strip().lower()
+            # 1. Try title_lowercase prefix search (Fastest)
+            query = collection.where("title_lowercase", ">=", search_clean).where("title_lowercase", "<=", search_clean + "\uf8ff").limit(limit)
+            results = query.get()
+            
+            # 2. Try artist_lowercase prefix search
+            if not results:
+                query = collection.where("artist_lowercase", ">=", search_clean).where("artist_lowercase", "<=", search_clean + "\uf8ff").limit(limit)
+                results = query.get()
+
+            # 3. FINAL FALLBACK: Substring search (Memory Intensive but better UX for small libraries)
+            if not results:
+                # We fetch a larger chunk to filter in memory. For 2k songs this is ~1-2MB of JSON.
+                # In a real production app with millions of songs, you'd use Algolia/Elasticsearch/Meilisearch.
+                all_docs = collection.stream()
+                songs = []
+                for doc in all_docs:
+                    d = doc.to_dict()
+                    title = d.get("title_lowercase", "").lower()
+                    artist = d.get("artist_lowercase", "").lower()
+                    if search_clean in title or search_clean in artist:
+                        d.pop("embedding", None)
+                        songs.append(d)
+                        if len(songs) >= limit:
+                            break
+                return songs
+        else:
+            # Standard pagination by title
+            query = collection.order_by("title").limit(limit)
+            if last_id:
+                last_doc = collection.document(last_id).get()
+                if last_doc.exists:
+                    query = query.start_after(last_doc)
+            results = query.get()
+            
+        songs = []
+        for doc in results:
+            d = doc.to_dict()
+            d.pop("embedding", None)
+            d["album_art_url"] = f"http://192.168.1.100:8000/art/{d['id']}"
+            songs.append(d)
+        
+        return songs
+    except Exception as e:
+        logger.error(f"Failed to list songs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 class ChatResponse(BaseModel):
     response: str
@@ -362,21 +597,15 @@ async def curate_playlist(request: PlaylistRequest):
                     if not song_data.get("title"):
                         song_data["title"] = song_id.replace("_mp3", "").replace("_flac", "").replace("_", " ")
                     
-                    # Rate limiting: MusicBrainz allows 1 req/sec
-                    await asyncio.sleep(1.1)
-                    art_url = await get_album_art(
-                        artist=song_data.get("artist"), 
-                        album=song_data.get("album"), 
-                        title=song_data.get("title"),
-                        song_id=song_id
-                    )
-                    song_data["album_art_url"] = art_url
+                    # Use local art endpoint
+                    song_data["album_art_url"] = f"http://192.168.1.100:8000/art/{song_id}"
                     song_data.pop("embedding", None)
                     enriched_songs.append(song_data)
                 else:
-                    # If not in DB, use provided info but ensure a title exists
+                    # If not in DB, use provided info but ensure a title and art link exist
                     if not item.get("title") and item.get("filepath"):
                         item["title"] = os.path.basename(item["filepath"]).rsplit('.', 1)[0]
+                    item["album_art_url"] = f"http://192.168.1.100:8000/art/{song_id}"
                     enriched_songs.append(item)
             
             logger.info(f"Successfully curated {len(enriched_songs)} songs.")
@@ -388,11 +617,61 @@ async def curate_playlist(request: PlaylistRequest):
         logger.error(f"Agent failed to return an artifact. Output: {final_output}")
         raise HTTPException(status_code=500, detail="Agent failed to generate a playlist artifact.")
 
+@app.get("/art/{song_id}")
+async def get_art(song_id: str):
+    """Extracts and serves embedded album art from a song file."""
+    doc_ref = db.collection("songs").document(song_id)
+    doc = await asyncio.to_thread(doc_ref.get)
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Song not found")
+    
+    filepath = doc.to_dict().get("filepath")
+    if not filepath or not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    import io
+    from mutagen import File
+    
+    try:
+        audio = File(filepath)
+        art_data = None
+        mime = "image/jpeg"
+        
+        if filepath.lower().endswith(".mp3"):
+            if audio.tags and 'APIC:' in audio.tags:
+                art_data = audio.tags['APIC:'].data
+                mime = audio.tags['APIC:'].mime
+            elif audio.tags:
+                # Fallback to search any APIC tag
+                for tag in audio.tags.values():
+                    if hasattr(tag, 'type') and tag.type == 3: # Front cover
+                        art_data = tag.data
+                        mime = tag.mime
+                        break
+        elif filepath.lower().endswith(".flac"):
+            if audio.pictures:
+                art_data = audio.pictures[0].data
+                mime = audio.pictures[0].mime
+        elif filepath.lower().endswith((".m4a", ".mp4")):
+            if 'covr' in audio:
+                art_data = audio['covr'][0]
+                # mutagen.mp4 doesn't give mime directly but covr is usually jpeg/png
+                mime = "image/jpeg" 
+        
+        if art_data:
+            return StreamingResponse(io.BytesIO(art_data), media_type=mime)
+            
+    except Exception as e:
+        logger.error(f"Failed to extract art: {e}")
+
+    # Fallback to a placeholder or 404
+    raise HTTPException(status_code=404, detail="No embedded art found")
+
 @app.get("/stream/{song_id}")
 async def stream_audio(song_id: str):
     """Streams a local audio file by looking up its filepath in Firestore."""
     doc_ref = db.collection("songs").document(song_id)
-    doc = doc_ref.get()
+    doc = await asyncio.to_thread(doc_ref.get)
     
     if not doc.exists:
         logger.error(f"Stream requested for unknown song ID: {song_id}")
@@ -414,13 +693,14 @@ async def stream_audio(song_id: str):
     elif filepath.lower().endswith(".m4a") or filepath.lower().endswith(".mp4"):
         media_type = "audio/mp4"
         
-    logger.info(f"Streaming {filepath} as {media_type}")
+    file_size = os.path.getsize(filepath)
+    logger.info(f"SONOS/STREAM: {song_id} -> {filepath} ({media_type}, {file_size} bytes)")
+    
     return FileResponse(
         filepath, 
         media_type=media_type, 
         headers={
             "Accept-Ranges": "bytes",
-            "Cache-Control": "no-cache",
         }
     )
 
@@ -428,7 +708,7 @@ async def stream_audio(song_id: str):
 async def get_metadata(song_id: str):
     """Fetches rich metadata for a song from Firestore."""
     doc_ref = db.collection("songs").document(song_id)
-    doc = doc_ref.get()
+    doc = await asyncio.to_thread(doc_ref.get)
     
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Song not found.")
