@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package agentic_workflow;
+
+// --- Common Data Models ---
+
+message Song {
+  string id = 1;
+  string title = 2;
+  string artist = 3;
+  string filepath = 4;
+  string album_art_url = 5;
+  string album = 6;
+  string genre = 7;
+  int32 year = 8;
+  string description_for_search = 9;
+}
+
+message SonosDevice {
+  string name = 1;
+  string ip = 2;
+}
+
+message Playlist {
+  string id = 1;
+  string name = 2;
+  string prompt = 3;
+  repeated Song songs = 4;
+  int64 created_at = 5; // Unix timestamp
+}
+
+// --- Requests & Responses ---
+
+// /sonos/devices
+message GetSonosDevicesRequest {}
+message GetSonosDevicesResponse {
+  repeated SonosDevice devices = 1;
+}
+
+// /sonos/play
+message SonosPlayRequest {
+  string ip = 1;
+  string song_id = 2;
+}
+message SonosPlayResponse {
+  string status = 1;
+  string message = 2;
+}
+
+// /sonos/status/{ip}
+message GetSonosStatusRequest {
+  string ip = 1;
+}
+message GetSonosStatusResponse {
+  string status = 1;
+  string message = 2;
+  string state = 3;
+  int32 position = 4;
+  int32 duration = 5;
+  int32 volume = 6;
+}
+
+// /sonos/control
+message SonosControlRequest {
+  string ip = 1;
+  string action = 2; // "pause", "resume", "stop", "volume", "seek"
+  optional int32 value = 3;
+}
+message SonosControlResponse {
+  string status = 1;
+  string device = 2;
+  string action = 3;
+}
+
+// /playlists
+message PlaylistSaveRequest {
+  string name = 1;
+  string prompt = 2;
+  repeated Song songs = 3;
+}
+message PlaylistSaveResponse {
+  string status = 1;
+  string playlist_id = 2;
+}
+
+message ListPlaylistsRequest {}
+message ListPlaylistsResponse {
+  repeated Playlist playlists = 1;
+}
+
+// /songs
+message ListSongsRequest {
+  optional string search = 1;
+  int32 limit = 2;
+  optional string last_id = 3;
+}
+message ListSongsResponse {
+  repeated Song songs = 1;
+}
+
+// /personas
+message GetPersonasRequest {}
+message GetPersonasResponse {
+  repeated string personas = 1;
+}
+
+// /chat (Streaming)
+message ChatRequest {
+  string message = 1;
+  string persona = 2;
+}
+message ChatStreamEvent {
+  string type = 1; // e.g. "thought", "action", "delegation", "observation", "final_answer", "error"
+  string content = 2;
+  optional string tool = 3;
+  map<string, string> args = 4; 
+}
+
+// /curate_playlist
+message CuratePlaylistRequest {
+  string prompt = 1;
+}
+message CuratePlaylistResponse {
+  string status = 1;
+  repeated Song playlist = 2;
+}

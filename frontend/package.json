@@ -9,17 +9,20 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@bufbuild/buf": "^1.67.0",
+    "@bufbuild/protobuf": "^2.11.0",
+    "@bufbuild/protoc-gen-es": "^2.11.0",
     "@tailwindcss/typography": "^0.5.19",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.4.7",
     "lucide-react": "^0.577.0",
     "next": "16.2.1",
-    "framer-motion": "^12.4.7",
-    "clsx": "^2.1.1",
-    "tailwind-merge": "^3.0.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.1",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

@@ -18,9 +18,77 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from agent.agent_logic import GenericReActAgent, load_persona
 from agent.config import setup_logger, FIRESTORE_DATABASE_ID
 
+# --- Protobuf Imports ---
+from api_proto import api_pb2
+from google.protobuf import json_format
+
+from fastapi import Request, Response as FAResponse
+from functools import wraps
+
 # Initialize FastAPI and Logger
 app = FastAPI(title="Agentic Workflow Bridge")
 logger = setup_logger("Backend")
+
+# --- Protobuf Utilities ---
+class ProtobufResponse(FAResponse):
+    media_type = "application/x-protobuf"
+    def render(self, content: Any) -> bytes:
+        if isinstance(content, bytes):
+            return content
+        if hasattr(content, "SerializeToString"):
+            return content.SerializeToString()
+        return super().render(content)
+
+def protobuf_endpoint(pb_request_type: Any = None, pb_response_type: Any = None):
+    """
+    Decorator for FastAPI endpoints to support both JSON and Protobuf via negotiation.
+    - If Accept is application/x-protobuf, returns Protobuf.
+    - If Content-Type is application/x-protobuf, parses body as Protobuf.
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            # 1. Identify Request and Check Negotiation
+            request: Request = None
+            for arg in args:
+                if isinstance(arg, Request):
+                    request = arg
+                    break
+            if not request:
+                # Try to find in kwargs if not in args
+                request = kwargs.get("request")
+            
+            # 2. Check Input Content-Type for Protobuf
+            is_pb_request = False
+            if request and request.headers.get("Content-Type") == "application/x-protobuf" and pb_request_type:
+                body = await request.body()
+                pb_msg = pb_request_type()
+                pb_msg.ParseFromString(body)
+                # Convert PB to Dict/Pydantic-like if needed or pass as is
+                # For now, we'll pass the PB message object
+                kwargs["pb_data"] = pb_msg
+                is_pb_request = True
+
+            # 3. Call the actual function
+            result = await func(*args, **kwargs)
+
+            # 4. Check Output Negotiation
+            if request and "application/x-protobuf" in request.headers.get("Accept", ""):
+                if pb_response_type:
+                    # If result is already the PB message, just return it
+                    if isinstance(result, pb_response_type):
+                        return ProtobufResponse(result)
+                    
+                    # Otherwise, try to map dict/object to PB message
+                    pb_res = pb_response_type()
+                    if isinstance(result, dict):
+                        # Use json_format to map dict to proto (handles camelCase/snake_case etc)
+                        json_format.ParseDict(result, pb_res, ignore_unknown_fields=True)
+                        return ProtobufResponse(pb_res)
+                
+            return result
+        return wrapper
+    return decorator
 
 # CORS Configuration for Next.js frontend
 app.add_middleware(
@@ -319,8 +387,9 @@ async def list_playlists():
         logger.error(f"Failed to list playlists: {e}")
         return []
 
-@app.get("/songs")
-async def list_songs(search: str = None, limit: int = 100, last_id: str = None):
+@app.get("/songs", response_model=None)
+@protobuf_endpoint(None, api_pb2.ListSongsResponse)
+async def list_songs(request: Request, search: str = None, limit: int = 100, last_id: str = None):
     """Returns a list of all indexed songs with optional search filtering and cursor pagination."""
     try:
         collection = db.collection("songs")
@@ -378,16 +447,17 @@ class ChatResponse(BaseModel):
     thought: Optional[str] = None
 
 # --- Endpoints ---
-@app.get("/personas")
-async def get_personas():
+@app.get("/personas", response_model=None)
+@protobuf_endpoint(None, api_pb2.GetPersonasResponse)
+async def get_personas(request: Request):
     """Lists available personas from the agent/prompts directory."""
     prompts_dir = os.path.join(os.path.dirname(__file__), "..", "agent", "prompts")
     if not os.path.exists(prompts_dir):
         logger.warning(f"Prompts directory not found: {prompts_dir}")
-        return ["general"]
+        return {"personas": ["general"]}
     personas = [f[:-3] for f in os.listdir(prompts_dir) if f.endswith(".md")]
     logger.info(f"Returning personas: {personas}")
-    return personas
+    return {"personas": personas}
 
 import json
 import re
@@ -544,11 +614,23 @@ async def chat(request: ChatRequest):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@app.post("/curate_playlist")
-async def curate_playlist(request: PlaylistRequest):
+@app.post("/curate_playlist", response_model=None)
+@protobuf_endpoint(api_pb2.CuratePlaylistRequest, api_pb2.CuratePlaylistResponse)
+async def curate_playlist(request: Request, pb_data: Any = None):
     """Uses the HMAS to generate a curated playlist based on a natural language prompt."""
     if not mcp_manager.session:
         raise HTTPException(status_code=503, detail="MCP Server not connected")
+
+    prompt = ""
+    if pb_data:
+        prompt = pb_data.prompt
+    else:
+        # Fallback to JSON model
+        try:
+            json_body = await request.json()
+            prompt = json_body.get("prompt", "")
+        except:
+            raise HTTPException(status_code=400, detail="Invalid request body")
 
     async def execute_via_mcp(name, args):
         try:
@@ -562,7 +644,7 @@ async def curate_playlist(request: PlaylistRequest):
     agent = GenericReActAgent(registry, execute_via_mcp, persona="music_curator", strict_persona=True)
     
     # Append strict instruction to the prompt to guarantee JSON output
-    strict_prompt = request.prompt + "\n\nCRITICAL: You MUST use the query_song_database tool to find songs based on this context. Your final output MUST be wrapped in <artifact> tags and formatted strictly as a JSON array of song objects, exactly as instructed in your persona."
+    strict_prompt = prompt + "\n\nCRITICAL: You MUST use the query_song_database tool to find songs based on this context. Your final output MUST be wrapped in <artifact> tags and formatted strictly as a JSON array of song objects. DO NOT escape single quotes (e.g. use ' instead of \\') as it is invalid JSON."
     final_output = await agent.run_full(strict_prompt)
     logger.info(f"Agent raw output for curation: {final_output[:500]}...")
     
@@ -575,8 +657,11 @@ async def curate_playlist(request: PlaylistRequest):
             playlist_json = final_output.strip()
     
     if playlist_json:
+        # Pre-process common LLM JSON errors: backslash-escaped single quotes
+        # Standard JSON does not support \' and it often causes parsing errors
+        processed_json = playlist_json.replace(r"\'", "'")
         try:
-            raw_playlist = json.loads(playlist_json)
+            raw_playlist = json.loads(processed_json)
             # Support both a direct list or a dict containing a 'songs' list
             if isinstance(raw_playlist, dict) and "songs" in raw_playlist:
                 raw_playlist = raw_playlist["songs"]
@@ -611,7 +696,7 @@ async def curate_playlist(request: PlaylistRequest):
             logger.info(f"Successfully curated {len(enriched_songs)} songs.")
             return {"status": "success", "playlist": enriched_songs}
         except json.JSONDecodeError:
-            logger.error(f"Failed to parse playlist JSON: {playlist_json}")
+            logger.error(f"Failed to parse playlist JSON: {processed_json}")
             raise HTTPException(status_code=500, detail="Agent returned invalid playlist JSON.")
     else:
         logger.error(f"Agent failed to return an artifact. Output: {final_output}")
@@ -634,14 +719,17 @@ async def get_art(song_id: str):
     
     try:
         audio = File(filepath)
+        if audio is None:
+            raise HTTPException(status_code=404, detail="Could not parse audio file")
+            
         art_data = None
         mime = "image/jpeg"
         
         if filepath.lower().endswith(".mp3"):
-            if audio.tags and 'APIC:' in audio.tags:
+            if hasattr(audio, 'tags') and audio.tags and 'APIC:' in audio.tags:
                 art_data = audio.tags['APIC:'].data
                 mime = audio.tags['APIC:'].mime
-            elif audio.tags:
+            elif hasattr(audio, 'tags') and audio.tags:
                 # Fallback to search any APIC tag
                 for tag in audio.tags.values():
                     if hasattr(tag, 'type') and tag.type == 3: # Front cover
@@ -649,11 +737,11 @@ async def get_art(song_id: str):
                         mime = tag.mime
                         break
         elif filepath.lower().endswith(".flac"):
-            if audio.pictures:
+            if hasattr(audio, 'pictures') and audio.pictures:
                 art_data = audio.pictures[0].data
                 mime = audio.pictures[0].mime
         elif filepath.lower().endswith((".m4a", ".mp4")):
-            if 'covr' in audio:
+            if audio is not None and 'covr' in audio:
                 art_data = audio['covr'][0]
                 # mutagen.mp4 doesn't give mime directly but covr is usually jpeg/png
                 mime = "image/jpeg" 

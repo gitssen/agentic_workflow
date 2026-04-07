@@ -5,22 +5,19 @@ import { Search, Sparkles, Music, Play, Pause, ListMusic, Loader2, Save, X, Hist
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useMusic } from "@/lib/MusicContext";
-
-interface Song {
-  id: string;
-  title: string;
-  artist: string;
-  album: string;
-  album_art_url?: string;
-}
-
-interface SavedPlaylist {
-  id: string;
-  name: string;
-  prompt: string;
-  songs: Song[];
-  created_at: string | number | Date | null;
-}
+import { request as pbRequest } from "@/lib/pbClient";
+import { 
+  Song, 
+  Playlist as SavedPlaylist, 
+  ListSongsResponseSchema, 
+  GetPersonasResponseSchema, 
+  CuratePlaylistResponseSchema,
+  CuratePlaylistRequestSchema,
+  ListSongsRequestSchema,
+  ListPlaylistsResponseSchema,
+  PlaylistSaveRequestSchema,
+  PlaylistSaveResponseSchema,
+} from "@/api_proto/api_pb";
 
 export default function CuratorPage() {
   const { currentSong, isPlaying, playSong, nextSong, prevSong } = useMusic();
@@ -36,6 +33,9 @@ export default function CuratorPage() {
   const [isLibraryLoading, setIsLibraryLoading] = useState(false);
   const [hasMoreSongs, setHasMoreSongs] = useState(true);
 
+  // Persona state
+  const [personas, setPersonas] = useState<string[]>([]);
+
   // Saving functionality
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [playlistName, setPlaylistName] = useState("");
@@ -45,15 +45,22 @@ export default function CuratorPage() {
   useEffect(() => {
     fetchSavedPlaylists();
     fetchLibrary();
+    fetchPersonas();
   }, []);
+
+  const fetchPersonas = async () => {
+    try {
+      const response = await pbRequest("/personas", "GET", GetPersonasResponseSchema);
+      setPersonas(response.personas);
+    } catch (e) {
+      console.error("Failed to fetch personas", e);
+    }
+  };
 
   const fetchSavedPlaylists = async () => {
     try {
-      const res = await fetch("http://192.168.1.100:8000/playlists");
-      if (res.ok) {
-        const data = await res.json();
-        setSavedPlaylists(data);
-      }
+      const response = await pbRequest("/playlists", "GET", ListPlaylistsResponseSchema);
+      setSavedPlaylists(response.playlists);
     } catch (e) {
       console.error("Failed to fetch playlists", e);
     }
@@ -62,25 +69,21 @@ export default function CuratorPage() {
   const fetchLibrary = async (search: string = "", isLoadMore: boolean = false) => {
     setIsLibraryLoading(true);
     try {
-      const url = new URL("http://192.168.1.100:8000/songs");
-      if (search) url.searchParams.append("search", search);
-      
-      // Use the last song ID as cursor for pagination
-      if (isLoadMore && librarySongs.length > 0) {
-        url.searchParams.append("last_id", librarySongs[librarySongs.length - 1].id);
-      }
+      const data = {
+        search: search || undefined,
+        limit: 100,
+        lastId: isLoadMore && librarySongs.length > 0 ? librarySongs[librarySongs.length - 1].id : undefined,
+      };
 
-      const res = await fetch(url.toString());
-      if (res.ok) {
-        const data = await res.json();
-        if (isLoadMore) {
-          setLibrarySongs((prev) => [...prev, ...data]);
-        } else {
-          setLibrarySongs(data);
-        }
-        // If we got fewer than 100 songs, we've reached the end
-        setHasMoreSongs(data.length === 100);
+      const response = await pbRequest("/songs", "GET", ListSongsResponseSchema, ListSongsRequestSchema, data);
+      
+      if (isLoadMore) {
+        setLibrarySongs((prev) => [...prev, ...response.songs]);
+      } else {
+        setLibrarySongs(response.songs);
       }
+      // If we got fewer than 100 songs, we've reached the end
+      setHasMoreSongs(response.songs.length === 100);
     } catch (e) {
       console.error("Failed to fetch library", e);
     } finally {
@@ -109,15 +112,8 @@ export default function CuratorPage() {
     setCuratedPlaylist([]);
 
     try {
-      const response = await fetch("http://192.168.1.100:8000/curate_playlist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
-      });
-
-      if (!response.ok) throw new Error("Curation failed");
-      const data = await response.json();
-      setCuratedPlaylist(data.playlist);
+      const response = await pbRequest("/curate_playlist", "POST", CuratePlaylistResponseSchema, CuratePlaylistRequestSchema, { prompt });
+      setCuratedPlaylist(response.playlist);
     } catch (error) {
       console.error("Curation error:", error);
     } finally {
@@ -129,20 +125,14 @@ export default function CuratorPage() {
     if (!playlistName.trim() || curatedPlaylist.length === 0) return;
     setIsSaving(true);
     try {
-      const response = await fetch("http://192.168.1.100:8000/playlists", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: playlistName,
-          prompt: prompt,
-          songs: curatedPlaylist
-        }),
+      await pbRequest("/playlists", "POST", PlaylistSaveResponseSchema, PlaylistSaveRequestSchema, {
+        name: playlistName,
+        prompt: prompt,
+        songs: curatedPlaylist
       });
-      if (response.ok) {
-        setIsSaveModalOpen(false);
-        setPlaylistName("");
-        fetchSavedPlaylists();
-      }
+      setIsSaveModalOpen(false);
+      setPlaylistName("");
+      fetchSavedPlaylists();
     } catch (e) {
       console.error("Failed to save", e);
     } finally {
@@ -356,8 +346,8 @@ export default function CuratorPage() {
                                     onClick={() => handlePlayFromCurate(index)}
                                 >
                                     <div className="relative aspect-square rounded-3xl overflow-hidden mb-4 shadow-2xl border border-white/5 ring-0 ring-indigo-500/50 group-hover:ring-4 transition-all duration-500">
-                                    {song.album_art_url ? (
-                                        <img src={song.album_art_url} alt={song.title} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" />
+                                    {song.albumArtUrl ? (
+                                        <img src={song.albumArtUrl} alt={song.title} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" />
                                     ) : (
                                         <div className="w-full h-full bg-zinc-900 flex items-center justify-center text-zinc-800">
                                         <Music size={48} />
@@ -400,8 +390,8 @@ export default function CuratorPage() {
                                         )}
                                     >
                                         <div className="w-12 h-12 rounded-xl overflow-hidden relative shrink-0">
-                                            {song.album_art_url ? (
-                                                <img src={song.album_art_url} alt={song.title} className="w-full h-full object-cover" />
+                                            {song.albumArtUrl ? (
+                                                <img src={song.albumArtUrl} alt={song.title} className="w-full h-full object-cover" />
                                             ) : (
                                                 <div className="w-full h-full bg-zinc-900 flex items-center justify-center text-zinc-800">
                                                     <Music size={20} />
@@ -509,8 +499,8 @@ export default function CuratorPage() {
                                                 onClick={() => handlePlayFromLibrary(song)}
                                             >
                                                 <div className="relative aspect-square rounded-2xl overflow-hidden mb-3 shadow-xl border border-white/5 ring-0 ring-indigo-500/50 group-hover:ring-2 transition-all">
-                                                    {song.album_art_url ? (
-                                                        <img src={song.album_art_url} alt={song.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                                                    {song.albumArtUrl ? (
+                                                        <img src={song.albumArtUrl} alt={song.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
                                                     ) : (
                                                         <div className="w-full h-full bg-zinc-900 flex items-center justify-center text-zinc-800">
                                                             <Music size={32} />
@@ -546,8 +536,8 @@ export default function CuratorPage() {
                                                 )}
                                             >
                                                 <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0 relative">
-                                                    {song.album_art_url ? (
-                                                        <img src={song.album_art_url} alt={song.title} className="w-full h-full object-cover" />
+                                                    {song.albumArtUrl ? (
+                                                        <img src={song.albumArtUrl} alt={song.title} className="w-full h-full object-cover" />
                                                     ) : (
                                                         <div className="w-full h-full bg-zinc-900 flex items-center justify-center text-zinc-800">
                                                             <Music size={16} />
