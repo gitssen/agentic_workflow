@@ -28,10 +28,10 @@ def setup_logger(name: str):
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
         
-        # Stream Handler (Captures only ERROR and above for a clean CLI)
+        # Stream Handler (Captures only INFO and above for a clean CLI)
         # We explicitly use sys.stderr to avoid corrupting MCP Stdio (stdout)
         stream_handler = logging.StreamHandler(sys.stderr)
-        stream_handler.setLevel(logging.ERROR)
+        stream_handler.setLevel(logging.INFO)
         stream_handler.setFormatter(logging.Formatter("%(message)s"))
         
         logger.addHandler(file_handler)

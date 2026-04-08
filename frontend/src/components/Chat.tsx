@@ -16,15 +16,20 @@ interface Message {
   thought?: string;
 }
 
-interface ChatProps {
-  selectedPersona: string;
-}
-
-export default function Chat({ selectedPersona }: ChatProps) {
+export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [personas, setPersonas] = useState<string[]>(["general"]);
+  const [selectedPersona, setSelectedPersona] = useState("general");
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fetch("http://192.168.1.100:8000/personas")
+      .then((res) => res.json())
+      .then((data) => setPersonas(data))
+      .catch((err) => console.error("Failed to fetch personas", err));
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -125,29 +130,71 @@ export default function Chat({ selectedPersona }: ChatProps) {
   };
 
   return (
-    <div className="flex flex-col h-full w-full max-w-6xl mx-auto p-4 md:p-8 text-white pb-32">
+    <div className="flex flex-col h-full w-full max-w-6xl mx-auto p-4 md:p-8">
+      {/* Header */}
+      <header className="flex items-center justify-between mb-8 p-5 glass rounded-3xl sticky top-0 z-20">
+        <div className="flex items-center gap-5">
+          <div className="relative">
+            <div className="absolute inset-0 bg-indigo-500/40 blur-xl rounded-full animate-pulse" />
+            <div className="relative p-3 bg-indigo-600 rounded-2xl shadow-2xl">
+              <Sparkles className="text-white w-6 h-6" />
+            </div>
+          </div>
+          <div>
+            <h1 className="font-black text-2xl tracking-tight text-slate-800 dark:text-zinc-100 flex items-center gap-2">
+              Agentic <span className="px-2 py-0.5 bg-indigo-500/10 text-indigo-500 rounded-lg text-sm border border-indigo-500/20">v2.5</span>
+            </h1>
+            <div className="flex items-center gap-2 mt-0.5">
+               <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+               <p className="text-[10px] font-black text-slate-400 dark:text-zinc-500 uppercase tracking-widest">Active Reasoning Session</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+            <div className="hidden md:flex flex-col items-end mr-2">
+                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">Current Persona</p>
+                 <p className="text-sm font-bold text-indigo-500">{selectedPersona.replace("_", " ")}</p>
+            </div>
+            <div className="relative">
+              <select
+                value={selectedPersona}
+                onChange={(e) => setSelectedPersona(e.target.value)}
+                className="appearance-none bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 py-3 pl-6 pr-14 rounded-2xl text-xs font-black uppercase tracking-widest border-none focus:ring-2 focus:ring-indigo-500/50 transition-all cursor-pointer hover:bg-slate-200 dark:hover:bg-zinc-700"
+              >
+                {personas.map((p) => (
+                  <option key={p} value={p}>
+                    {p.replace("_", " ")}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+            </div>
+        </div>
+      </header>
+
       {/* Chat History */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto space-y-12 mb-8 px-2 scroll-smooth scrollbar-none pb-12"
+        className="flex-1 overflow-y-auto space-y-10 mb-8 px-2 scroll-smooth scrollbar-none"
       >
         <AnimatePresence initial={false}>
           {messages.length === 0 && (
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="flex flex-col items-center justify-center h-full text-center space-y-10 py-20"
+              className="flex flex-col items-center justify-center h-full text-center space-y-8"
             >
               <div className="relative group">
-                <div className="absolute inset-0 bg-indigo-500/20 blur-[100px] rounded-full group-hover:bg-indigo-500/30 transition-all duration-1000" />
-                <div className="relative p-12 glass rounded-[3.5rem] border-white/10 bg-white/5 shadow-2xl">
+                <div className="absolute inset-0 bg-indigo-500/20 blur-3xl rounded-full group-hover:bg-indigo-500/30 transition-colors" />
+                <div className="relative p-10 glass rounded-[3rem] border-white/40 dark:border-zinc-800/80 shadow-inner">
                   <Bot className="w-24 h-24 text-indigo-500" />
                 </div>
               </div>
-              <div className="space-y-4">
-                <h2 className="text-5xl font-black text-white tracking-tighter leading-none">How can I help today?</h2>
-                <p className="text-zinc-500 max-w-sm mx-auto font-bold uppercase tracking-[0.1em] text-[10px] leading-relaxed">
-                  Initiate an autonomous workflow by selecting a persona and defining your mission.
+              <div className="space-y-3">
+                <h2 className="text-4xl font-black text-slate-800 dark:text-zinc-100 tracking-tighter">How can I help today?</h2>
+                <p className="text-slate-500 dark:text-zinc-400 max-w-sm mx-auto font-medium leading-relaxed">
+                  Start an agentic workflow by selecting a persona and describing your goal.
                 </p>
               </div>
               
@@ -161,7 +208,7 @@ export default function Chat({ selectedPersona }: ChatProps) {
                     <button 
                         key={suggestion}
                         onClick={() => setInput(suggestion)}
-                        className="p-5 glass rounded-2xl text-[10px] font-black uppercase tracking-widest text-zinc-400 border-white/5 bg-white/5 hover:border-indigo-500/40 hover:text-indigo-400 transition-all text-center"
+                        className="p-4 glass rounded-2xl text-sm font-bold text-slate-600 dark:text-zinc-300 hover:border-indigo-500/50 hover:text-indigo-500 transition-all text-left"
                     >
                         {suggestion}
                     </button>
@@ -174,9 +221,9 @@ export default function Chat({ selectedPersona }: ChatProps) {
             <motion.div
               key={m.id}
               layout
-              initial={{ opacity: 0, y: 30, scale: 0.98 }}
+              initial={{ opacity: 0, y: 20, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ duration: 0.4, ease: "easeOut" }}
               className={cn(
                 "flex gap-6",
                 m.role === "user" ? "flex-row-reverse" : "flex-row"
@@ -184,30 +231,30 @@ export default function Chat({ selectedPersona }: ChatProps) {
             >
               <div
                 className={cn(
-                  "flex-shrink-0 w-14 h-14 rounded-2xl flex items-center justify-center shadow-2xl relative z-10 border border-white/10",
+                  "flex-shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center shadow-2xl relative z-10",
                   m.role === "user"
-                    ? "bg-indigo-600 text-white shadow-indigo-600/30"
-                    : "glass bg-white/10 text-indigo-400"
+                    ? "bg-indigo-600 text-white shadow-indigo-500/40"
+                    : "glass text-indigo-500"
                 )}
               >
-                {m.role === "user" ? <User size={28} /> : <Bot size={28} />}
+                {m.role === "user" ? <User size={24} /> : <Bot size={24} />}
                 {isLoading && index === messages.length - 1 && m.role === "assistant" && (
-                    <div className="absolute inset-0 rounded-2xl border-2 border-indigo-500 animate-ping opacity-30" />
+                    <div className="absolute inset-0 rounded-2xl border-2 border-indigo-500 animate-ping opacity-20" />
                 )}
               </div>
 
               <div
                 className={cn(
-                  "flex flex-col max-w-[85%] md:max-w-[75%]",
+                  "flex flex-col max-w-[85%] md:max-w-[80%]",
                   m.role === "user" ? "items-end" : "items-start"
                 )}
               >
                 <div
                   className={cn(
-                    "prose prose-invert prose-sm md:prose-base max-w-none px-8 py-6 rounded-[2.5rem] shadow-2xl",
+                    "prose prose-slate dark:prose-invert prose-sm md:prose-base max-w-none px-7 py-5 rounded-[2.5rem] shadow-xl",
                     m.role === "user"
-                      ? "bg-indigo-600 text-white rounded-tr-none border border-white/10"
-                      : "glass rounded-tl-none bg-white/5 border-white/5"
+                      ? "bg-indigo-600 text-white rounded-tr-none border border-indigo-400/20"
+                      : "glass rounded-tl-none"
                   )}
                 >
                   <ReactMarkdown
@@ -216,33 +263,33 @@ export default function Chat({ selectedPersona }: ChatProps) {
                       code({ inline, className, children, ...props }: any) {
                         const match = /language-(\w+)/.exec(className || "");
                         return !inline && match ? (
-                          <div className="relative group/code my-8">
-                            <div className="absolute -top-3 left-4 px-3 py-1 bg-zinc-800 text-zinc-400 text-[9px] font-black uppercase tracking-widest rounded-full z-10 border border-zinc-700 shadow-xl">
+                          <div className="relative group/code my-6">
+                            <div className="absolute -top-3 left-4 px-3 py-1 bg-zinc-800 text-zinc-400 text-[10px] font-black uppercase tracking-widest rounded-full z-10 border border-zinc-700">
                                 {match[1]}
                             </div>
                             <SyntaxHighlighter
                               style={oneDark}
                               language={match[1]}
                               PreTag="div"
-                              className="!rounded-3xl !p-8 !bg-zinc-950 border border-white/5 shadow-inner"
+                              className="!rounded-3xl !p-6 !bg-zinc-950/90 border border-white/5 shadow-2xl"
                               {...props}
                             >
                               {String(children).replace(/\n$/, "")}
                             </SyntaxHighlighter>
                           </div>
                         ) : (
-                          <code className="bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-lg font-black tracking-tight" {...props}>
+                          <code className="bg-indigo-500/10 text-indigo-500 dark:text-indigo-400 px-2 py-0.5 rounded-lg font-bold" {...props}>
                             {children}
                           </code>
                         );
                       },
-                      p: ({ children }) => <p className="leading-relaxed mb-4 last:mb-0 font-bold text-zinc-200">{children}</p>,
+                      p: ({ children }) => <p className="leading-relaxed mb-4 last:mb-0 font-medium">{children}</p>,
                       a: ({ node, ...props }) => (
                         <a
                           {...props}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-indigo-400 hover:text-indigo-300 underline underline-offset-8 decoration-2 transition-all font-black"
+                          className="text-indigo-500 dark:text-indigo-400 hover:underline underline-offset-4 decoration-2 transition-colors font-bold"
                         />
                       ),
                     }}
@@ -255,15 +302,15 @@ export default function Chat({ selectedPersona }: ChatProps) {
                   <motion.div 
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="mt-6 w-full"
+                    className="mt-4 w-full"
                   >
                     <details className="group">
-                      <summary className="flex items-center gap-3 text-[10px] font-black uppercase tracking-[0.25em] text-zinc-600 hover:text-indigo-400 cursor-pointer list-none select-none transition-all">
-                        <Terminal size={14} className="group-open:text-indigo-400" />
-                        Matrix Execution Trace
-                        <div className="h-px flex-1 bg-white/5 ml-4" />
+                      <summary className="flex items-center gap-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-zinc-500 hover:text-indigo-500 cursor-pointer list-none select-none transition-all">
+                        <Terminal size={14} className="group-open:text-indigo-500" />
+                        Execution Trace
+                        <div className="h-px flex-1 bg-slate-200 dark:bg-zinc-800/50 ml-2" />
                       </summary>
-                      <div className="mt-5 ml-2 pl-8 border-l-2 border-indigo-500/20 py-4 text-[11px] text-zinc-500 font-mono whitespace-pre-wrap leading-relaxed bg-white/[0.02] rounded-r-3xl pr-6">
+                      <div className="mt-4 ml-2 pl-6 border-l-2 border-indigo-500/20 py-2 text-xs text-slate-500 dark:text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed">
                         {m.thought}
                       </div>
                     </details>
@@ -276,72 +323,70 @@ export default function Chat({ selectedPersona }: ChatProps) {
         
         {isLoading && messages[messages.length-1]?.role !== "assistant" && (
           <motion.div 
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             className="flex gap-6"
           >
-            <div className="flex-shrink-0 w-14 h-14 rounded-2xl glass bg-white/5 flex items-center justify-center relative border border-white/10">
+            <div className="flex-shrink-0 w-12 h-12 rounded-2xl glass flex items-center justify-center relative">
                <div className="absolute inset-0 rounded-2xl border-2 border-indigo-500 animate-ping opacity-20" />
-               <Bot size={28} className="text-indigo-400 animate-pulse" />
+               <Bot size={24} className="text-indigo-400 animate-pulse" />
             </div>
-            <div className="px-10 py-6 rounded-[2.5rem] glass bg-white/5 border-white/10 flex items-center gap-3 shadow-2xl">
-               <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s] shadow-[0_0_8px_rgba(99,102,241,0.5)]" />
-               <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.15s] shadow-[0_0_8px_rgba(99,102,241,0.5)]" />
-               <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce shadow-[0_0_8px_rgba(99,102,241,0.5)]" />
-               <span className="ml-4 text-[10px] font-black uppercase tracking-[0.3em] text-indigo-400/80">Processing Data</span>
+            <div className="px-8 py-5 rounded-[2rem] glass flex items-center gap-3">
+               <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s]" />
+               <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.15s]" />
+               <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce" />
+               <span className="ml-2 text-xs font-black uppercase tracking-widest text-indigo-500/60">Thinking</span>
             </div>
           </motion.div>
         )}
       </div>
 
       {/* Input Area */}
-      <footer className="fixed bottom-32 left-0 right-0 px-4 md:px-8 z-20">
-        <div className="max-w-6xl mx-auto relative">
-          <form
-            onSubmit={handleSubmit}
-            className="relative glass p-2.5 rounded-[3rem] transition-all focus-within:ring-4 focus-within:ring-indigo-500/10 group shadow-2xl bg-zinc-900/60 border-white/10"
+      <footer className="sticky bottom-0 pb-4 pt-2">
+        <form
+          onSubmit={handleSubmit}
+          className="relative glass p-2 md:p-3 rounded-[3rem] transition-all focus-within:ring-4 focus-within:ring-indigo-500/20 group shadow-indigo-500/5"
+        >
+          <div className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 transition-colors">
+             <Terminal size={18} />
+          </div>
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Describe a goal or ask a question..."
+            className="w-full bg-transparent py-4 pl-14 pr-20 text-sm md:text-base text-slate-800 dark:text-zinc-100 focus:outline-none placeholder-slate-400 font-bold tracking-tight"
+          />
+          <button
+            type="submit"
+            disabled={!input.trim() || isLoading}
+            className="absolute right-3 top-1/2 -translate-y-1/2 p-4 bg-indigo-600 text-white rounded-[2rem] hover:bg-indigo-500 disabled:opacity-20 transition-all shadow-xl shadow-indigo-500/20 active:scale-95 flex items-center justify-center overflow-hidden"
           >
-            <div className="absolute left-8 top-1/2 -translate-y-1/2 text-zinc-500 group-focus-within:text-indigo-400 transition-colors">
-               <Terminal size={20} />
-            </div>
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Command the swarm..."
-              className="w-full bg-transparent py-5 pl-16 pr-24 text-base text-white focus:outline-none placeholder-zinc-700 font-bold tracking-tight"
-            />
-            <button
-              type="submit"
-              disabled={!input.trim() || isLoading}
-              className="absolute right-3.5 top-1/2 -translate-y-1/2 p-5 bg-indigo-600 text-white rounded-[2.5rem] hover:bg-indigo-500 disabled:opacity-20 transition-all shadow-2xl shadow-indigo-600/30 active:scale-90 flex items-center justify-center overflow-hidden border border-white/10"
-            >
-              <AnimatePresence mode="wait">
-                {isLoading ? (
-                  <motion.div
-                    key="loading"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin"
-                  />
-                ) : (
-                  <motion.div
-                    key="send"
-                    initial={{ opacity: 0, scale: 0.8 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.8 }}
-                  >
-                    <Send size={24} />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </button>
-          </form>
-          <p className="mt-5 text-[10px] text-center font-black uppercase tracking-[0.4em] text-zinc-700">
-             Distributed Reasoning Engine • Matrix OS v2.5
-          </p>
-        </div>
+            <AnimatePresence mode="wait">
+              {isLoading ? (
+                <motion.div
+                  key="loading"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"
+                />
+              ) : (
+                <motion.div
+                  key="send"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                >
+                  <Send size={20} />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </button>
+        </form>
+        <p className="mt-4 text-[10px] text-center font-black uppercase tracking-[0.3em] text-slate-400 dark:text-zinc-600">
+           Powered by Gemini 2.5 Flash • Multi-Agent Reasoner
+        </p>
       </footer>
     </div>
   );
