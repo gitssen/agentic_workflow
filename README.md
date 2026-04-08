@@ -1,45 +1,54 @@
 # LangGraph-Powered MCP Agentic Workflow
 
-A state-of-the-art AI agent framework built on **LangGraph** and the **Model Context Protocol (MCP)**. This system features **Tool-RAG** (Retrieval-Augmented Generation for tools), **Recursive Sub-Agents**, and a formal **State Machine** architecture for high reliability and scalability.
+A state-of-the-art AI agent framework built on **LangGraph** and the **Model Context Protocol (MCP)**. This system features **Tool-RAG** (Retrieval-Augmented Generation for tools), **Recursive Sub-Agents**, a formal **State Machine** architecture, and a deep **Music Curation & Control** integration.
 
 ---
 
 ## 🏗 Architecture Overview
 
-The system utilizes a decoupled, modern architecture that separates reasoning, orchestration, and execution.
+The system utilizes a decoupled, modern architecture that separates reasoning, orchestration, and execution, now enhanced with cross-language scripts and hybrid communication protocols.
 
 ### 1. The Reasoning Engine (LangGraph Multi-Agent)
-The core logic has been evolved from a manual ReAct loop into a formal **LangGraph StateGraph** featuring a **Supervisor + Specialists** architecture.
-- **Supervisor Routing**: A Chief QA Supervisor evaluates the shared `artifact` against the user's request and intelligently delegates to specific experts.
-- **Shared Blackboard State**: Agents communicate and collaborate by reading and writing to a universal `artifact` in the graph state, along with `eval_feedback` and an `is_approved` gatekeeper flag.
-- **Specialist Personas**: Includes dedicated personas like `blog_writer`, `style_editor`, `senior_coder`, `qa_tester`, `news_analyst`, and `travel_companion`.
-- **Native Tool Binding**: Leverages Gemini's function-calling capabilities through LangChain's `bind_tools` for maximum precision.
+The core logic utilizes a formal **LangGraph StateGraph** featuring a **Supervisor + Specialists** architecture.
+- **Supervisor Routing**: A Chief QA Supervisor evaluates the shared `artifact` and intelligently delegates to specialists.
+- **Dynamic Personas**: Supports runtime selection of expert personas (e.g., `music_curator`, `senior_coder`, `news_analyst`, `travel_companion`) stored as Markdown templates in `agent/prompts/`.
+- **Blackboard State**: Agents collaborate via a universal `artifact` in the graph state, ensuring high-quality, iterative output.
+- **Context Isolation**: Strictly manages conversation history to prevent LLM "loops" and ensure specialists focus on the current task state.
 
-### 2. The MCP Host (`backend/main.py`)
-The "Brain" that connects to specialized execution environments.
-- **Tool-RAG**: Uses Gemini embeddings and Firestore Vector Search to dynamically inject only context-relevant tools into the agent's prompt.
+### 2. The MCP Host & Backend (`backend/main.py`)
+The "Brain" connects the reasoning engine to execution environments and the web.
+- **Hybrid Protocol Support**: A custom FastAPI bridge supporting both **JSON** and **Protobuf** via automated content negotiation (Accept/Content-Type headers).
+- **Tool-RAG**: Uses Gemini embeddings and Firestore Vector Search to dynamically inject context-relevant tools into the agent's prompt.
 - **SSE Streaming**: Provides real-time "Thought-Action-Observation" updates to the frontend via Server-Sent Events.
-- **Standardized Communication**: Uses the Model Context Protocol to talk to the tool server via Stdio.
 
-### 3. The MCP Server (`agent/mcp_server.py`)
+### 3. The Music & Media Ecosystem
+A specialized suite for high-performance music management and smart playback.
+- **Sonos Integration**: Native discovery and control of Sonos speakers (Play, Pause, Volume, Seek, Status).
+- **Automated Curation**: The `music_curator` persona generates structured JSON playlists based on natural language prompts.
+- **Rich Metadata & Art**:
+    - **Go Ingestion**: High-performance Go scripts for scanning and indexing thousands of tracks.
+    - **Smart Art Fetching**: Multi-tier art resolution (Embedded Metadata -> Local SQLite Cache -> Firestore -> MusicBrainz/CoverArtArchive).
+    - **Local Streaming**: Serves audio and embedded art directly from the filesystem to Sonos or the Web UI.
+
+### 4. The MCP Server (`agent/mcp_server.py`)
 The "Hands" of the operation. It manages the execution of Python functions.
-- **Dynamic Schema Generation**: Automatically translates Python functions into strict JSON Schemas using Pydantic, ensuring 100% compatibility with Gemini.
-- **Self-Resolving Tools**: Automatically injects a `SubAgent` into tools, allowing them to gather missing context (e.g., location) autonomously.
-- **Execution Isolation**: Tools run in a separate process, protecting the main reasoning engine from execution errors.
+- **Self-Resolving Tools**: Automatically injects a `SubAgent` into tools, allowing them to gather missing context recursively.
+- **Execution Isolation**: Tools run in a separate process, protecting the main reasoning engine from side effects.
 
 ---
 
 ## 🛠 Project Structure
 
-- `agent/`: The core package.
-  - `tools/`: **Vanilla Python** functions. Documented and portable.
+- `agent/`: The core agent logic and MCP host.
+  - `prompts/`: Markdown templates for different agent personas.
+  - `tools/`: Vanilla Python functions for Search, Coding, Traffic, News, and Music.
   - `agent_logic.py`: The **LangGraph** definition and `SubAgent` implementation.
   - `mcp_server.py`: The tool execution server.
-  - `register_tools.py`: Management script for Firestore tool indexing.
-  - `config.py`: Centralized logging and client initialization.
-- `backend/main.py`: FastAPI bridge between the Agent and the Web.
-- `frontend/`: Next.js web interface featuring real-time reasoning visualization.
-- `start.sh`: Unified startup script for the entire stack.
+- `api_proto/`: Protobuf definitions for cross-platform type safety.
+- `backend/main.py`: FastAPI bridge with Sonos control and audio streaming.
+- `frontend/`: Next.js web interface with real-time reasoning visualization and a custom Music Player.
+- `scripts/`: High-performance **Go** scripts for music library management (`ingest_music`, `check_art`).
+- `music_cache.db`: Local SQLite database for fast album art caching.
 
 ---
 
@@ -47,20 +56,15 @@ The "Hands" of the operation. It manages the execution of Python functions.
 
 ### Prerequisites
 1. **Gemini API Key**: Get one from [Google AI Studio](https://aistudio.google.com/).
-2. **Firebase Project**: A Firestore database with a **Vector Index** on the `embedding` field in the `tools` collection (Dimension: 768, Measure: COSINE).
-3. **Python 3.13+**
-4. **Node.js & npm**
+2. **Firebase Project**: A Firestore database with a **Vector Index** on the `embedding` field in the `tools` and `songs` collections.
+3. **Python 3.13+**, **Go 1.22+**, and **Node.js 20+**.
 
 ### Installation
 1. Clone the repository.
-2. Setup the virtual environment:
+2. Setup the virtual environment and install dependencies:
    ```bash
    python3 -m venv .venv
-   source .venv/bin/activate  # or use ./.venv/bin/python3
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
+   ./.venv/bin/pip install -r requirements.txt
    cd frontend && npm install && cd ..
    ```
 
@@ -69,46 +73,48 @@ Create a `.env` file in the root directory:
 ```env
 GEMINI_API_KEY=your_key_here
 GOOGLE_PROJECT_ID=your_project_id_here
-GOOGLE_MAPS_API_KEY=your_maps_api_key_here
-UBER_API_KEY=your_uber_key_here
-RAINFOREST_API_KEY=your_rainforest_key_here
 FIRESTORE_DATABASE_ID=default
+# Optional API Keys for Tools
+GOOGLE_MAPS_API_KEY=...
+NEWS_API_KEY=...
 ```
 
 ---
 
 ## 🏃 Running the System
 
-### 1. Register Tools (Required after tool changes)
+### 1. Music Library Ingestion (Optional)
+If you have a local music library, index it for the agent:
+```bash
+# Set your music path in scripts/ingest_music.go or pass as arg
+go run scripts/ingest_music.go /path/to/my/music
+```
+
+### 2. Register Tools
 Updates the Firestore index with latest signatures and embeddings:
 ```bash
 export PYTHONPATH=$(pwd)
 ./.venv/bin/python3 agent/register_tools.py
 ```
 
-### 2. Start the Full Stack
-The provided script starts the FastAPI backend, MCP Server, and Next.js frontend:
+### 3. Start the Full Stack
+The provided script starts the FastAPI backend (port 8000), MCP Server, and Next.js frontend (port 3000):
 ```bash
 chmod +x start.sh
 ./start.sh
-```
-
-### 3. Verify the Installation
-Run the end-to-end verification script to test connectivity and tool reasoning:
-```bash
-./.venv/bin/python3 verify_system.py
 ```
 
 ---
 
 ## 📜 Design Principles
 
-1. **Graph-Based Orchestration**: Move beyond loops to state machines for complex multi-agent workflows.
-2. **Dynamic Schemas**: Trust-but-verify tool arguments using Pydantic models generated at runtime.
-3. **Tool-RAG**: Keep the context window clean by only showing the agent what it needs to see.
-4. **Absolute Package Structure**: Standardized imports (`from agent.config ...`) for robustness across different entry points.
+1. **Protocol Negotiation**: Support modern (Protobuf) and web-standard (JSON) communication seamlessly.
+2. **Recursive Reasoning**: Tools can think for themselves by spinning up sub-agents.
+3. **Hybrid Performance**: Combine the reasoning power of Python with the execution speed of Go.
+4. **Clean Context**: Use Tool-RAG to keep the LLM's attention focused on the most relevant capabilities.
 
 ---
 
-## 🔍 Monitoring
-Detailed traces of the reasoning process, tool calls, and Sub-Agent interactions are available in `logs/agent.log`.
+## 🔍 Monitoring & Documentation
+- **Logs**: Detailed reasoning traces are available in `logs/agent.log`.
+- **Design Docs**: See `design.md` for architectural deep-dives and `MULTI_SERVER_PLAN.md` for the future roadmap.
