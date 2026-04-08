@@ -83,8 +83,13 @@ def protobuf_endpoint(pb_request_type: Any = None, pb_response_type: Any = None)
                     pb_res = pb_response_type()
                     if isinstance(result, dict):
                         # Use json_format to map dict to proto (handles camelCase/snake_case etc)
-                        json_format.ParseDict(result, pb_res, ignore_unknown_fields=True)
-                        return ProtobufResponse(pb_res)
+                        try:
+                            json_format.ParseDict(result, pb_res, ignore_unknown_fields=True)
+                            return ProtobufResponse(pb_res)
+                        except Exception as e:
+                            logger.error(f"Protobuf mapping failed: {e}")
+                            logger.error(f"Dict content: {result}")
+                            raise HTTPException(status_code=500, detail=f"Protobuf mapping error: {str(e)}")
                 
             return result
         return wrapper
@@ -100,7 +105,32 @@ app.add_middleware(
     expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type"],
 )
 
-# --- MCP Client Management ---
+import time
+
+# --- Global Music State ---
+class GlobalMusicState(BaseModel):
+    current_song: Optional[Dict[str, Any]] = None
+    is_playing: bool = False
+    playlist: List[Dict[str, Any]] = []
+    last_updated: float = 0
+
+global_music_state = GlobalMusicState()
+
+@app.get("/music/state")
+async def get_music_state():
+    """Returns the current global music playback state."""
+    return global_music_state
+
+@app.post("/music/state")
+async def update_music_state(state: GlobalMusicState):
+    """Updates the global music playback state."""
+    global global_music_state
+    global_music_state = state
+    # Use real-world Unix time so frontend Date.now() can compare it
+    global_music_state.last_updated = time.time()
+    return {"status": "success"}
+
+# --- Sonos Client Management ---
 class MCPManager:
     """Manages a persistent connection to the MCP Server."""
     def __init__(self):
@@ -359,16 +389,29 @@ async def control_sonos(request: SonosControlRequest):
         logger.error(f"Sonos control failed ({request.action}): {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/playlists")
-async def save_playlist(request: PlaylistSaveRequest):
+@app.post("/playlists", response_model=None)
+@protobuf_endpoint(api_pb2.PlaylistSaveRequest, api_pb2.PlaylistSaveResponse)
+async def save_playlist(request: Request, pb_data: Any = None):
     """Saves a curated playlist to Firestore."""
     try:
+        if pb_data:
+            # Convert protobuf to dict for Firestore
+            data_dict = json_format.MessageToDict(pb_data, preserving_proto_field_name=True)
+            name = data_dict.get("name")
+            prompt = data_dict.get("prompt")
+            songs = data_dict.get("songs", [])
+        else:
+            data = await request.json()
+            name = data.get("name")
+            prompt = data.get("prompt")
+            songs = data.get("songs", [])
+
         new_ref = db.collection("playlists").document()
         playlist_data = {
             "id": new_ref.id,
-            "name": request.name,
-            "prompt": request.prompt,
-            "songs": request.songs,
+            "name": name,
+            "prompt": prompt,
+            "songs": songs,
             "created_at": firestore.SERVER_TIMESTAMP
         }
         new_ref.set(playlist_data)
@@ -377,15 +420,25 @@ async def save_playlist(request: PlaylistSaveRequest):
         logger.error(f"Failed to save playlist: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/playlists")
-async def list_playlists():
+@app.get("/playlists", response_model=None)
+@protobuf_endpoint(None, api_pb2.ListPlaylistsResponse)
+async def list_playlists(request: Request):
     """Returns all saved playlists."""
     try:
         docs = db.collection("playlists").order_by("created_at", direction=firestore.Query.DESCENDING).get()
-        return [doc.to_dict() for doc in docs]
+        playlists = []
+        for doc in docs:
+            d = doc.to_dict()
+            # Convert Firestore timestamp to Unix timestamp (int64) for Protobuf
+            if "created_at" in d and hasattr(d["created_at"], "timestamp"):
+                d["created_at"] = int(d["created_at"].timestamp())
+            elif "created_at" in d and d["created_at"] is None:
+                d["created_at"] = 0
+            playlists.append(d)
+        return {"playlists": playlists}
     except Exception as e:
         logger.error(f"Failed to list playlists: {e}")
-        return []
+        return {"playlists": []}
 
 @app.get("/songs", response_model=None)
 @protobuf_endpoint(None, api_pb2.ListSongsResponse)
@@ -393,6 +446,7 @@ async def list_songs(request: Request, search: str = None, limit: int = 100, las
     """Returns a list of all indexed songs with optional search filtering and cursor pagination."""
     try:
         collection = db.collection("songs")
+        songs = []
         
         if search:
             search_clean = search.strip().lower()
@@ -407,10 +461,7 @@ async def list_songs(request: Request, search: str = None, limit: int = 100, las
 
             # 3. FINAL FALLBACK: Substring search (Memory Intensive but better UX for small libraries)
             if not results:
-                # We fetch a larger chunk to filter in memory. For 2k songs this is ~1-2MB of JSON.
-                # In a real production app with millions of songs, you'd use Algolia/Elasticsearch/Meilisearch.
                 all_docs = collection.stream()
-                songs = []
                 for doc in all_docs:
                     d = doc.to_dict()
                     title = d.get("title_lowercase", "").lower()
@@ -420,7 +471,13 @@ async def list_songs(request: Request, search: str = None, limit: int = 100, las
                         songs.append(d)
                         if len(songs) >= limit:
                             break
-                return songs
+                return {"songs": songs}
+            else:
+                for doc in results:
+                    d = doc.to_dict()
+                    d.pop("embedding", None)
+                    d["album_art_url"] = f"http://192.168.1.100:8000/art/{d['id']}"
+                    songs.append(d)
         else:
             # Standard pagination by title
             query = collection.order_by("title").limit(limit)
@@ -429,15 +486,13 @@ async def list_songs(request: Request, search: str = None, limit: int = 100, las
                 if last_doc.exists:
                     query = query.start_after(last_doc)
             results = query.get()
-            
-        songs = []
-        for doc in results:
-            d = doc.to_dict()
-            d.pop("embedding", None)
-            d["album_art_url"] = f"http://192.168.1.100:8000/art/{d['id']}"
-            songs.append(d)
+            for doc in results:
+                d = doc.to_dict()
+                d.pop("embedding", None)
+                d["album_art_url"] = f"http://192.168.1.100:8000/art/{d['id']}"
+                songs.append(d)
         
-        return songs
+        return {"songs": songs}
     except Exception as e:
         logger.error(f"Failed to list songs: {e}")
         raise HTTPException(status_code=500, detail=str(e))

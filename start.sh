@@ -12,25 +12,26 @@ pkill -f "next-dev"
 
 echo "🚀 Starting Agentic Workflow..."
 
+# Ensure logs directory exists
+mkdir -p logs
+
 # Start Backend (FastAPI + MCP Host) with Auto-Reload
-# The backend will automatically start the MCP Server subprocess
-echo "Starting Backend (FastAPI) with --reload..."
+# We use --log-level error to keep the console clean, info logs go to logs/agent.log automatically
+echo "Starting Backend (FastAPI)..."
 export PYTHONPATH=$(pwd)
-# We use uvicorn with --reload for hot-reloading on Python file changes
-./.venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload &
+./.venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload --log-level error > logs/backend.log 2>&1 &
 BACKEND_PID=$!
 
 sleep 2
 
-
 # Start Frontend (Next.js)
 echo "Starting Frontend (Next.js)..."
-cd frontend && npm run dev -- -H 0.0.0.0 &
+cd frontend && npm run dev -- -H 0.0.0.0 > ../logs/frontend.log 2>&1 &
 FRONTEND_PID=$!
 
 echo "--------------------------------------------------------"
-echo "Backend: http://192.168.1.100:8000"
-echo "Frontend: http://192.168.1.100:3000"
+echo "Backend:  http://192.168.1.100:8000 (Logs: logs/backend.log)"
+echo "Frontend: http://192.168.1.100:3000 (Logs: logs/frontend.log)"
 echo "--------------------------------------------------------"
 echo "Press Ctrl+C to stop all services."
 
