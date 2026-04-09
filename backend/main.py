@@ -143,7 +143,7 @@ class MCPManager:
             mcp_path = os.path.join(os.path.dirname(__file__), "..", "agent", "mcp_server.py")
             logger.info(f"Starting MCP Server from: {mcp_path}")
             server_params = StdioServerParameters(
-                command="./.venv/bin/python3",
+                command="./venv/bin/python3",
                 args=[mcp_path],
                 env={**os.environ}
             )

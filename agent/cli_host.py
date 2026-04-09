@@ -94,7 +94,7 @@ async def main():
     logger.info(f"Active Persona: {persona}")
 
     server_params = StdioServerParameters(
-        command="../venv/bin/python3",
+        command="./venv/bin/python3",
         args=["mcp_server.py"],
         env={**os.environ}
     )
